@@ -164,9 +164,8 @@ static int xerror(Display *dpy, XErrorEvent *ee)
     
     // 准备上下文信息
     snprintf(context_buf, sizeof(context_buf),
-             "Code: %s/%u, Resource: %lu, Serial: %lu",
-             ee->error_code == 10 ? "BadAccess" : "OtherError",
-             ee->request_code, ee->resourceid, ee->serial);
+             "Code: OtherError/%u, Resource: %lu, Serial: %lu",
+             ee->error_code, ee->resourceid, ee->serial);
 
 	switch (ee->request_code) {
 	case 12: request_name = "XChangeWindowAttributes/XSelectInput"; break;
@@ -174,6 +173,8 @@ static int xerror(Display *dpy, XErrorEvent *ee)
 	case 7:  request_name = "XGrabButton"; break;
 	case 44: request_name = "XUngrabKey/XUngrabButton"; break;
 	case 42: request_name = "XGrabKey"; break;
+	case 33: request_name = "XGrabServer/XUngrabServer"; break;
+	case 18: request_name = "XChangeProperty"; break;
 	default: break;
 	}
 
@@ -267,7 +268,7 @@ static const struct key keys[] = {
 
 	{ XK_SUPER,   XK_Right,     view_next_tab,  {0} },
 	{ XK_SUPER,   XK_Left,      view_prev_tab,  {0} },
-        { XK_SUPER,   XK_t,         new_tab,        {0} },
+    { XK_SUPER,   XK_t,         new_tab,        {0} },
 	{ XK_SUPER,   XK_j,         focus_next_cli, {0} },
 	{ XK_SUPER,   XK_k,         focus_prev_cli, {0} },
 };
@@ -321,7 +322,13 @@ void view_next_tab(const union arg *arg)
 	if (!t || !t->mon)
 		return;
 
-	next = t->next ? t->next : t->mon->tabs;
+	// 从当前 Tab 开始，找下一个 Tab
+	next = t->next;
+	// 如果当前 Tab 是最后一个，则绕回到第一个 Tab
+	if (!next) {
+		next = t->mon->tabs;
+	}
+
 	if (next && next != t) {
 		log_action("ViewNextTab: Switching from tab 0x%lx to 0x%lx",
 			t->id, next->id);
@@ -337,7 +344,15 @@ void view_prev_tab(const union arg *arg)
 	if (!t || !t->mon)
 		return;
 
-	prev = t->prev ? t->prev : t->mon->tabs;
+	// 从当前 Tab 开始，找上一个 Tab
+	prev = t->prev;
+	// 如果当前 Tab 是第一个，则绕回到最后一个 Tab
+	if (!prev) {
+		prev = t->mon->tabs;
+		while (prev && prev->next)
+			prev = prev->next;
+	}
+
 	if (prev && prev != t) {
 		log_action("ViewPrevTab: Switching from tab 0x%lx to 0x%lx",
 			t->id, prev->id);
@@ -385,7 +400,7 @@ void focus_prev_cli(const union arg *arg)
 
 typedef void (*XEventHandler)(XEvent *);
 
-#define LAST_EVENT_TYPE 35
+#define LAST_EVENT_TYPE 36 // 修正：确保事件类型数组足够大，即使 XEvent::type 的最大值是 35
 
 static XEventHandler handler[LAST_EVENT_TYPE];
 
@@ -414,9 +429,11 @@ static void c_til_remove(struct cli *c)
 			if (t->cli_til_cnt > 0) {
 				for (; i < t->cli_til_cnt; i++)
 					t->clis_til[i] = t->clis_til[i + 1];
+				// 重新分配内存（可能变小）
 				t->clis_til = realloc(t->clis_til,
 					t->cli_til_cnt * sizeof(struct cli *));
 			} else {
+				// 客户端数量为 0，释放内存并置空指针
 				free(t->clis_til);
 				t->clis_til = NULL;
 			}
@@ -469,6 +486,8 @@ static void c_attach_flt(struct cli *c, struct tab *t)
 static void c_detach_flt(struct cli *c)
 {
 	struct tab *t = c->tab;
+
+	if (!t) return;
 
 	if (c->prev)
 		c->prev->next = c->next;
@@ -770,9 +789,6 @@ void c_unfoc(struct cli *c)
 	c->is_foc = false;
 }
 
-// ----------------------------------------------------
-// 修复 3A: t_sel 保持不变，它依赖于 t_unsel 和 m_update 来完成工作。
-// ----------------------------------------------------
 void t_sel(struct tab *t)
 {
 	if (!t || t == runtime.tab_sel)
@@ -798,9 +814,6 @@ void t_sel(struct tab *t)
 	m_update(t->mon); 
 }
 
-// ----------------------------------------------------
-// 修复 3B: t_unsel 强制同步隐藏（已在您的版本中，保持）
-// ----------------------------------------------------
 void t_unsel(struct tab *t)
 {
 	struct cli *c;
@@ -921,23 +934,26 @@ void c_moveto_t(struct cli *c, struct tab *t)
 
 	log_action("Client 0x%lx move to tab 0x%lx", c->win, t->id);
 
+	// 移除客户端在旧 Tab 上的特殊列表位置
 	if (c->is_tile)
 		c_til_remove(c);
 	if (c->is_float)
 		c_detach_flt(c);
 
+	// 从旧 Tab 的 general list 移除
 	c_detach_t(c);
+	// 附加到新 Tab 的 general list
 	c_attach_t(c, t);
 
+	// 重新附加到新 Tab 的特殊列表
 	if (c->is_float)
 		c_attach_flt(c, t);
 	else
 		c_til_append(c, t);
 
 	m_update(m_old);
-	m_update(t->mon);
-
 	t_sel(t);
+	m_update(t->mon);
 }
 
 void c_moveto_m(struct cli *c, struct mon *m)
@@ -1240,9 +1256,6 @@ void m_destroy(struct mon *m)
 		m_sel(m_fallback);
 }
 
-// ----------------------------------------------------
-// 修复 3C: m_update 确保强制映射所有客户端（已在您的版本中，保持）
-// ----------------------------------------------------
 void m_update(struct mon *m)
 {
 	struct tab *t;
@@ -1426,15 +1439,18 @@ static void handle_maprequest(XEvent *e)
 
 	c->win = ev->window;
 
+	// 获取窗口的初始几何信息
 	XGetGeometry(t->mon->display, c->win, &wa.root,
 		&c->x, &c->y, &c->w, &c->h,
 		&wa.border_width, &depth);
 
+	// 设置浮动窗口的初始值
 	c->flt_x = c->x;
 	c->flt_y = c->y;
 	c->flt_w = c->w;
 	c->flt_h = c->h;
 
+	// 初始化拖拽信息
 	c->drag_x = c->x;
 	c->drag_y = c->y;
 	c->drag_w = c->w;
@@ -1442,6 +1458,7 @@ static void handle_maprequest(XEvent *e)
 	c->drag_root_x = 0;
 	c->drag_root_y = 0;
 
+	// 确定初始布局模式（根据 arrange_type 或 transient hint）
 	c->is_float = (runtime.arrange_type == 1);
 
 	if (XGetTransientForHint(t->mon->display, c->win, &trans) &&
@@ -1452,25 +1469,29 @@ static void handle_maprequest(XEvent *e)
 	if ((wmh = XGetWMHints(t->mon->display, c->win)))
 		XFree(wmh);
 
+	// 1. 将客户端附加到 WM 的内部结构中
 	c_attach_t(c, t);
 
+	// 2. 关键修复：在附加后、MapWindow之前，设置事件监听（修复 BadValue/XError 2 风险）
 	XSelectInput(c->mon->display, c->win,
 		EnterWindowMask | FocusChangeMask | ButtonPressMask);
 
 	if (c->is_float) {
 		log_action("  Client is floating.");
-		c_float(c);
+		c_float(c); // c_float 会调用 c_attach_flt 和 m_update
 	} else {
 		log_action("  Client is tiled.");
-		c_tile(c);
+		c_tile(c); // c_tile 会调用 c_til_append 和 m_update
 	}
     
     // 如果客户端被添加到非活动 Tab，需要立即隐藏它。
     if (t != runtime.tab_sel) {
         log_action("  Client mapped on UNSELECTED tab 0x%lx. Hiding it immediately.", t->id);
         c_hide(c);
-        // 不调用 XMapWindow，也不调用 c_sel/m_update
+        // c_hide 中包含了 XUnmapWindow，这里不应该调用 XMapWindow
     } else {
+		// 如果是选中 Tab，c_tile/c_float 中的 m_update 会处理 XMapWindow，
+		// 但为了确保万无一失，这里可以保留 XMapWindow
         XMapWindow(c->mon->display, c->win);
         c_sel(c);
         m_update(t->mon);
@@ -1549,8 +1570,8 @@ static void handle_buttonpress(XEvent *e)
 			return;
 	}
     
-    // 只有当窗口在选中的 Tab 上，才进行操作
-    if (c->tab != runtime.tab_sel && c->win != c->mon->root) {
+    // 只有当窗口在选中的 Tab 上，才进行操作（根窗口除外）
+    if (c->tab && c->tab != runtime.tab_sel && c->win != c->mon->root) {
         log_action("ButtonPress: client 0x%lx ignored (not on selected tab)", c->win);
         return;
     }
@@ -1682,7 +1703,8 @@ static void handle_configurerequest(XEvent *e)
 	log_action("ConfigureRequest: Window 0x%lx (managed, float: %d)",
 		c->win, c->is_float);
     
-    // 只有活动 Tab 上的窗口才能通过 ConfigureRequest 更改浮动属性
+    // 修复 3: 忽略非选中 Tab 上的平铺客户端的 ConfigureRequest
+    // 只有在选中的 Tab 上，或者窗口是浮动的（即使在未选中 Tab 也应处理配置），才继续。
     if (c->tab != runtime.tab_sel && c->is_tile) {
         log_action("  Ignoring ConfigureRequest on unselected tiled client 0x%lx", c->win);
         return;
@@ -1712,6 +1734,7 @@ static void handle_configurerequest(XEvent *e)
 			wc.x, wc.y, wc.width, wc.height);
 
 	} else {
+		// 平铺窗口忽略客户端请求的 size/pos
 		wc.x = c->x;
 		wc.y = c->y;
 		wc.width = c->w;
@@ -1764,9 +1787,6 @@ static void handle_unmapnotify(XEvent *e)
 	}
 }
 
-// ----------------------------------------------------
-// 修复 3D: MapNotify 关键逻辑修复
-// ----------------------------------------------------
 static void handle_mapnotify(XEvent *e)
 {
 	XMapEvent *ev = &e->xmap;
@@ -1797,7 +1817,7 @@ static void handle_mapnotify(XEvent *e)
 				c_sel(c);
 				m_update(c->mon);
 			} else {
-				// 关键修复: 窗口被意外映射，但它不在当前选中的 Tab 上。
+				// 关键修复 2: 窗口被意外映射，但它不在当前选中的 Tab 上。
 				// 立即再次隐藏它，以保证 Tab 隔离。
                 log_action("  CRITICAL FIX: Window mapped on UNSELECTED tab 0x%lx. Hiding again.", t->id);
                 c_hide(c);
@@ -1837,19 +1857,18 @@ void setup(void)
 		exit(1);
 	}
 
-    // ----------------------------------------------------
     // 新增：打开日志文件 ~/devlog
-    // ----------------------------------------------------
     char *home = getenv("HOME");
     if (home) {
         char log_path[512];
+        // 使用 "w" 模式覆盖现有文件，或 "a" 模式追加。此处使用 "a" 追加。
         snprintf(log_path, sizeof(log_path), "%s/devlog", home);
         logfile = fopen(log_path, "a");
         if (!logfile) {
             fprintf(stderr, "pico: Warning: Could not open log file %s\n", log_path);
         } else {
             // 写入分隔线，标记新的 WM 会话
-            fprintf(logfile, "\n======================================================\n");
+            fprintf(logfile, "\n============================ WM START ============================\n");
             log_action("Log file opened successfully: %s", log_path);
         }
     }
@@ -1897,7 +1916,7 @@ void run(void)
 	while (1) {
 		XNextEvent(runtime.dpy, &ev);
 
-		if (handler[ev.type])
+		if (ev.type >= 0 && ev.type < LAST_EVENT_TYPE && handler[ev.type])
 			handler[ev.type](&ev);
 	}
 }
