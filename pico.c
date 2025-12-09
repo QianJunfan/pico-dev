@@ -159,6 +159,7 @@ static void start_move_resize(XEvent *e)
 	if (!c)
 		return;
 
+    // 检查按键修饰符是否匹配 Mod4Mask (Super Key)
 	if (CLEANMASK(be->state) != MOD_MASK)
 		return;
 
@@ -172,15 +173,19 @@ static void start_move_resize(XEvent *e)
 	c->start_w = wa.width;
 	c->start_h = wa.height;
 	
-	if (XGrabPointer(dpy, be->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess)
+	// 在客户端窗口上抓取指针，而不是在根窗口
+	if (XGrabPointer(dpy, c->win, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess)
 		return;
 
-	if (be->button == 3) {
+    // 如果是鼠标中键 (Button 2) 或右键 (Button 3) 启动缩放
+	if (be->button == 3) { 
+        // 将鼠标指针移动到窗口的右下角，以便更容易开始缩放
 		XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
 	}
 	
 	do {
-		XMaskEvent(dpy, MOUSE_MASK | ExposureMask | SubstructureRedirectMask, &ev);
+		// 仅掩蔽拖动和释放事件，减少不必要的事件处理
+		XMaskEvent(dpy, MOUSE_MASK, &ev);
 		
 		switch (ev.type) {
 		case EV_MotionNotify: {
@@ -193,38 +198,26 @@ static void start_move_resize(XEvent *e)
 			xdiff = me->x_root - be->x_root;
 			ydiff = me->y_root - be->y_root;
 			
-			if (be->button == 1) { 
+			if (be->button == 1) { // 移动 (Super + Left Click)
 				c->x = c->start_x + xdiff;
 				c->y = c->start_y + ydiff;
 				XMoveWindow(dpy, c->win, c->x, c->y);
-			} else if (be->button == 3) { 
-				c->w = MAX(1, me->x_root - c->start_x);
-				c->h = MAX(1, me->y_root - c->start_y);
+			} else if (be->button == 3) { // 缩放 (Super + Right Click)
+				c->w = MAX(1, c->start_w + xdiff); // 修正：基于起始宽度和拖动差值计算新宽度
+				c->h = MAX(1, c->start_h + ydiff); // 修正：基于起始高度和拖动差值计算新高度
 				XResizeWindow(dpy, c->win, c->w, c->h);
 			}
 			break;
 		}
-		
-		case EV_MapRequest:
-			handle_map_request(&ev);
-			break;
-		case EV_ConfigureRequest:
-			handle_configure_request(&ev);
-			break;
-		case EV_DestroyNotify:
-			handle_destroy_notify(&ev);
-			break;
-		case EV_UnmapNotify:
-			handle_unmap_notify(&ev);
-			break;
-		case EV_Expose:
-			handle_expose(&ev);
-			break;
+        
+        // 在拖动/缩放循环中，不应该处理 Map/Configure/Destroy 等其他事件，否则可能导致逻辑混乱或死锁
+        // 任何被 XMaskEvent 捕获但未处理的事件都会被留给主循环处理。
 		}
 	} while (ev.type != EV_ButtonRelease);
 
 	XUngrabPointer(dpy, CurrentTime);
 
+    // 清理掉任何积累的 EnterNotify 事件
 	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
 }
 
@@ -430,7 +423,6 @@ static void handle_configure_request(XEvent *e)
 	
 	c = client_find(ev->window);
 	if (c) {
-		// 修复 #2: 客户端自己请求配置时，同步更新本地几何数据
 		if (ev->value_mask & CWX) c->x = ev->x;
 		if (ev->value_mask & CWY) c->y = ev->y;
 		if (ev->value_mask & CWWidth) c->w = ev->width;
@@ -543,7 +535,8 @@ static void grabkeys(void)
 {
 	updatenumlockmask();
 	unsigned int j;
-	unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask|LockMask };
+	// 修正：这是标准 Xlib 抓取修饰符，确保 NumLock/Caps Lock 状态不影响 MOD_MASK (Super Key)
+	unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask|LockMask, Mod2Mask, Mod2Mask|LockMask, Mod2Mask|numlockmask, Mod2Mask|numlockmask|LockMask };
 	KeyCode k1 = XKeysymToKeycode(dpy, XK_F1);
 	KeyCode k2 = XKeysymToKeycode(dpy, XK_F2);
 	KeyCode k_quit = XKeysymToKeycode(dpy, XK_q);
@@ -552,8 +545,9 @@ static void grabkeys(void)
 	KeyCode k_k = XKeysymToKeycode(dpy, XK_k);
 
 	XUngrabKey(dpy, AnyKey, AnyModifier, root);
+    XUngrabButton(dpy, AnyButton, AnyModifier, root);
 
-	for (j = 0; j < 4; j++) {
+	for (j = 0; j < 8; j++) {
 		if (k1) XGrabKey(dpy, k1, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		if (k2) XGrabKey(dpy, k2, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		if (k_quit) XGrabKey(dpy, k_quit, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
@@ -566,7 +560,9 @@ static void grabkeys(void)
 			if (k_ws) XGrabKey(dpy, k_ws, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		}
 
+        // 关键修复：在根窗口抓取 Super + 鼠标左键 (Button 1) 用于移动
 		XGrabButton(dpy, 1, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
+        // 关键修复：在根窗口抓取 Super + 鼠标右键 (Button 3) 用于缩放
 		XGrabButton(dpy, 3, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
 	}
 }
