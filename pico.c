@@ -10,7 +10,7 @@
 #include <string.h>
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define MOD_MASK Mod4Mask
+#define MOD_MASK Mod4Mask // Super/Windows Key
 #define MOUSE_MASK (ButtonPressMask|ButtonReleaseMask|PointerMotionMask)
 #define CLEANMASK(mask) (mask & ~(numlockmask|LockMask) & (ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask))
 
@@ -41,7 +41,8 @@ struct client {
 	Window win;
 	int ws_id;
 	int x, y, w, h;
-	int start_x, start_y, start_w, start_h;
+	// start_* stores geometry at the beginning of the move/resize operation
+	int start_x, start_y, start_w, start_h; 
 };
 
 struct workspace {
@@ -78,7 +79,7 @@ static void handle_destroy_notify(XEvent *e);
 static void handle_enter_notify(XEvent *e);
 static void handle_expose(XEvent *e);
 static void handle_key_press(XEvent *e);
-static void start_move_resize(XEvent *e); /* NEW: Replaces button_press/motion_notify/button_release */
+static void start_move_resize(XEvent *e); 
 static void init_bar(void);
 static void draw_bar(void);
 static void init_workspaces(void);
@@ -109,6 +110,7 @@ int main(void)
 	sw = DisplayWidth(dpy, screen);
 	sh = DisplayHeight(dpy, screen);
 
+	// Select for events on the root window (SubstructureRedirectMask is vital)
 	XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask | EnterWindowMask);
 	
 	init_workspaces();
@@ -124,7 +126,7 @@ int main(void)
 			handle_key_press(&ev);
 			break;
 		case EV_ButtonPress:
-			start_move_resize(&ev); /* Use the DWM-style grab loop */
+			start_move_resize(&ev); 
 			break;
 		case EV_MapRequest:
 			handle_map_request(&ev);
@@ -144,7 +146,6 @@ int main(void)
 		case EV_Expose:
 			handle_expose(&ev);
 			break;
-		/* EV_MotionNotify and EV_ButtonRelease are now handled inside start_move_resize */
 		}
 	}
 }
@@ -165,9 +166,14 @@ static void start_move_resize(XEvent *e)
 	if (!c)
 		return;
 
-	// 1. Focus the client and save starting geometry
+	// Check if the correct modifier (Mod4Mask/Super) is pressed
+	if (CLEANMASK(be->state) != MOD_MASK)
+		return;
+
+	// Focus the client
 	client_focus(c);
 	
+	// Get and save starting geometry (c->start_x/y/w/h)
 	if (!XGetWindowAttributes(dpy, c->win, &wa))
 		return;
 
@@ -176,56 +182,47 @@ static void start_move_resize(XEvent *e)
 	c->start_w = wa.width;
 	c->start_h = wa.height;
 	
-	// 2. Grab the pointer (if the modifier is pressed)
-	if (CLEANMASK(be->state) != MOD_MASK)
-		return;
-
-    // Use Button1 for move, Button3 for resize (as per grabkeys)
-    if (be->button != 1 && be->button != 3)
-        return;
-        
+	// Grab the pointer
 	if (XGrabPointer(dpy, be->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess)
 		return;
 
-    // For resize (Button3), warp pointer to bottom-right for DWM-style resizing
+    // For resize (Button3), warp pointer to bottom-right (DWM style)
     if (be->button == 3) {
         XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
     }
     
-	// 3. Enter the DWM-style continuous drag loop
+	// Enter the continuous drag loop
 	do {
-		// Mask for mouse events (MotionNotify, ButtonRelease) and general WM events
 		XMaskEvent(dpy, MOUSE_MASK | ExposureMask | SubstructureRedirectMask, &ev);
 		
 		switch (ev.type) {
 		case EV_MotionNotify: {
 			XMotionEvent *me = &ev.xmotion;
 			int xdiff, ydiff;
-			int nx, ny, nw, nh;
+			int nw, nh;
 
-			// Check if the motion event is associated with the grab
 			if (me->window != c->win)
 				break;
 			
-			// Calculate displacement from initial press (be->x_root, be->y_root)
+			// Calculate displacement from initial press point (be->x_root)
 			xdiff = me->x_root - be->x_root;
 			ydiff = me->y_root - be->y_root;
 			
-			if (be->button == 1) { /* Move Window */
-				nx = c->start_x + xdiff;
-				ny = c->start_y + ydiff;
+			if (be->button == 1) { /* Move Window (Button 1) */
+				int nx = c->start_x + xdiff;
+				int ny = c->start_y + ydiff;
 				XMoveWindow(dpy, c->win, nx, ny);
                 
-			} else if (be->button == 3) { /* Resize Window */
-				// DWM calculates new size based on root pointer position relative to original corner
-				nw = MAX(1, c->start_w + xdiff);
-				nh = MAX(1, c->start_h + ydiff);
+			} else if (be->button == 3) { /* Resize Window (Button 3) */
+				// DWM-style resizing: New size = absolute current mouse position - fixed top-left anchor
+				nw = MAX(1, me->x_root - c->start_x); 
+				nh = MAX(1, me->y_root - c->start_y);
 				XResizeWindow(dpy, c->win, nw, nh);
 			}
 			break;
 		}
 		
-		// Also dispatch other essential WM events while dragging
+		// Dispatch other events while dragging
 		case EV_MapRequest:
 			handle_map_request(&ev);
 			break;
@@ -244,7 +241,7 @@ static void start_move_resize(XEvent *e)
 		}
 	} while (ev.type != EV_ButtonRelease); // Loop until mouse button is released
 
-	// 4. Cleanup after release
+	// Cleanup after release
 	XUngrabPointer(dpy, CurrentTime);
 
 	// Update client geometry from current window state
