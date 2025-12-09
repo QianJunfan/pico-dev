@@ -13,7 +13,7 @@
 
 void launch_xterm() {
     if (fork() == 0) {
-        setsid();
+        setsid(); 
         execlp("xterm", "xterm", NULL);
         perror("Failed to launch xterm");
         _exit(EXIT_FAILURE); 
@@ -27,12 +27,16 @@ int main(void)
     XButtonEvent start;
     XEvent ev;
 
-    if(!(dpy = XOpenDisplay(0x0))) return 1;
+    if(!(dpy = XOpenDisplay(NULL))) {
+        fprintf(stderr, "pico: Cannot open display.\n");
+        return 1;
+    }
 
     if (XSelectInput(dpy, DefaultRootWindow(dpy), 
                      SubstructureRedirectMask | SubstructureNotifyMask) & BadAccess) 
     {
         fprintf(stderr, "pico: Another window manager is already running.\n");
+        XCloseDisplay(dpy);
         return 1;
     }
     
@@ -60,6 +64,7 @@ int main(void)
             KeySym keysym = XkbKeycodeToKeysym(dpy, ev.xkey.keycode, 0, 0); 
 
             if (keysym == XK_q && (ev.xkey.state & SUPER_MASK)) {
+                XCloseDisplay(dpy);
                 return 0;
             }
 
@@ -83,11 +88,18 @@ int main(void)
         {
             int xdiff = ev.xbutton.x_root - start.x_root;
             int ydiff = ev.xbutton.y_root - start.y_root;
+
+            int new_x = attr.x + (start.button==1 ? xdiff : 0);
+            int new_y = attr.y + (start.button==1 ? ydiff : 0);
+            
+            int new_width = MAX(1, attr.width + (start.button==3 ? xdiff : 0));
+            int new_height = MAX(1, attr.height + (start.button==3 ? ydiff : 0));
+            
             XMoveResizeWindow(dpy, start.subwindow,
-                attr.x + (start.button==1 ? xdiff : 0),
-                attr.y + (start.button==1 ? ydiff : 0),
-                MAX(1, attr.width + (start.button==3 ? xdiff : 0)),
-                MAX(1, attr.height + (start.button==3 ? ydiff : 0)));
+                new_x,
+                new_y,
+                new_width,
+                new_height);
         }
         else if(ev.type == ButtonRelease)
             start.subwindow = None;
