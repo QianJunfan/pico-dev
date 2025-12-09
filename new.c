@@ -812,6 +812,7 @@ void c_moveto_m(struct cli *c, struct mon *m)
 
 	c_moveto_t(c, m->tab_sel);
 }
+
 void c_kill(struct cli *c)
 {
         struct mon *m_old = c->mon;
@@ -819,14 +820,12 @@ void c_kill(struct cli *c)
         Atom *protocols;
         bool supports_delete = false;
         
-        // 1. 检查客户端和显示器指针是否有效
         if (!c || !c->win || !c->mon)
                 return;
         
-        // 2. 保存显示器指针，防止在 detach 后丢失
+        // 修复 1：在 detach 之前保存 display 指针
         Display *dpy = c->mon->display; 
 
-        // 3. 检查 WM_DELETE_WINDOW 协议
         if (XGetWMProtocols(c->mon->display, c->win, &protocols, &n))
         {
                 for (int i = 0; i < n; i++)
@@ -840,7 +839,6 @@ void c_kill(struct cli *c)
                 XFree(protocols);
         }
 
-        // 4. 如果支持协议，发送 ClientMessage 并返回
         if (supports_delete)
         {
                 XEvent ev;
@@ -856,19 +854,14 @@ void c_kill(struct cli *c)
                 return;
         }
 
-        // 5. 如果不支持协议，则强制关闭：
-        
-        // 将客户端从 Tab/Monitor 中分离
         c_detach_t(c);
 
-        // 使用之前保存的 dpy 指针来销毁窗口
+        // 修复 1：使用保存的 dpy 指针
         if (c->win)
                 XDestroyWindow(dpy, c->win); 
 
-        // 释放客户端结构体内存
         free(c);
 
-        // 6. 更新旧显示器布局并重新选择
         m_update(m_old);
 
         if (runtime.mon_sel)
@@ -1205,55 +1198,45 @@ static void handle_maprequest(XEvent *e)
 	Window trans = None;
 	XWMHints *wmh;
 
-	// 1. 初始检查
-	// 确保有选定的 Tab/Monitor，且窗口不是已知的客户端
 	if (!t || !t->mon || !t->mon->display || c_fetch(ev->window))
 		return;
 
-	// 检查窗口属性
 	if (!XGetWindowAttributes(t->mon->display, ev->window, &wa))
 		return;
 
-	if (wa.override_redirect) // 忽略 override_redirect 窗口（如菜单、提示框）
+	if (wa.override_redirect)
 		return;
 
-	// 2. 客户端结构体分配和基础设置
 	c = calloc(1, sizeof(*c));
 	if (!c)
 		return;
 
 	c->win = ev->window;
 
-	// 3. 获取几何信息
 	XGetGeometry(t->mon->display, c->win, &wa.root,
 		&c->x, &c->y, &c->w, &c->h,
 		&wa.border_width, &depth);
 
-	// 4. 初始化浮动尺寸/位置
 	c->flt_x = c->x;
 	c->flt_y = c->y;
 	c->flt_w = c->w;
 	c->flt_h = c->h;
 
-	// 5. 确定浮动状态
 	c->is_float = (runtime.arrange_type == 1);
 
 	if (XGetTransientForHint(t->mon->display, c->win, &trans) && trans != None) {
-		c->is_float = true; // 瞬态窗口默认浮动
+		c->is_float = true;
 	}
 
 	if ((wmh = XGetWMHints(t->mon->display, c->win)))
 		XFree(wmh);
 
-	// 6. 核心修复：连接客户端到 Tab/Monitor
-	// 必须在第一次使用 c->mon 之前调用！
+	// 修复 2a：将 c_attach_t 提前到所有需要 c->mon 的操作之前
 	c_attach_t(c, t); 
 
-	// 7. 选择输入事件（现在 c->mon->display 是有效的）
 	XSelectInput(c->mon->display, c->win,
 		EnterWindowMask | FocusChangeMask);
 
-	// 8. 窗口布局和映射
 	if (c->is_float)
 		c_float(c);
 	else
@@ -1262,30 +1245,10 @@ static void handle_maprequest(XEvent *e)
 	XMapWindow(c->mon->display, c->win);
 	c_sel(c);
 	m_update(t->mon);
-}
-static void handle_destroynotify(XEvent *e)
-{
-	XDestroyWindowEvent *ev = &e->xdestroywindow;
-	struct cli *c;
-	struct mon *m_old;
 
-	if (!(c = c_fetch(ev->window)))
-		return;
-
-	m_old = c->mon;
-
-	if (c->tab) {
-		c_detach_t(c);
-	} else {
-		c_detach_d(c);
-	}
-
-	free(c);
-
-	if (m_old)
-		m_update(m_old);
-	else
-		m_sel(runtime.mon_sel);
+	// 修复 2b：强制与 X Server 同步，解决 fatal IO error 11
+    if (c->mon)
+	    XSync(c->mon->display, False); 
 }
 
 static void handle_enternotify(XEvent *e)
