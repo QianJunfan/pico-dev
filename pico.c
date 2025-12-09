@@ -40,6 +40,7 @@ struct client {
 	Window win;
 	int ws_id;
 	int x, y, w, h;
+	int start_x, start_y, start_w, start_h;
 };
 
 struct workspace {
@@ -229,11 +230,11 @@ static void handle_map_request(XEvent *e)
 	if (wa.override_redirect)
 		return;
 
-	XMoveResizeWindow(dpy, ev->window, 0, BAR_HEIGHT, sw, sh - BAR_HEIGHT);
 	wa.x = 0;
 	wa.y = BAR_HEIGHT;
 	wa.width = sw;
 	wa.height = sh - BAR_HEIGHT;
+	XMoveResizeWindow(dpy, ev->window, wa.x, wa.y, wa.width, wa.height);
 	
 	client_add(ev->window, &wa);
 	XMapWindow(dpy, ev->window);
@@ -318,6 +319,7 @@ static void handle_key_press(XEvent *e)
 static void handle_button_press(XEvent *e, XButtonEvent *start)
 {
 	struct client *c;
+	XWindowAttributes wa;
 	
 	if (e->xbutton.subwindow == None || e->xbutton.subwindow == bar_win)
 		return;
@@ -328,6 +330,14 @@ static void handle_button_press(XEvent *e, XButtonEvent *start)
 
 	*start = e->xbutton;
 	client_focus(c);
+	
+	if (!XGetWindowAttributes(dpy, c->win, &wa))
+		return;
+
+	c->start_x = wa.x;
+	c->start_y = wa.y;
+	c->start_w = wa.width;
+	c->start_h = wa.height;
 	
 	XGrabPointer(dpy, start->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
 }
@@ -348,38 +358,38 @@ static void handle_motion_notify(XEvent *e, XButtonEvent *start)
 	ydiff = e->xmotion.y_root - start->y_root;
 	
 	if (start->button == 1) {
-		int new_x = c->x + xdiff;
-		int new_y = c->y + ydiff;
+		int new_x = c->start_x + xdiff;
+		int new_y = c->start_y + ydiff;
 		
 		XMoveWindow(dpy, c->win, new_x, new_y);
-		c->x = new_x;
-		c->y = new_y;
 	} else if (start->button == 3) {
-		int new_w = MAX(1, c->w + xdiff);
-		int new_h = MAX(1, c->h + ydiff);
+		int new_w = MAX(1, c->start_w + xdiff);
+		int new_h = MAX(1, c->start_h + ydiff);
 		
 		XResizeWindow(dpy, c->win, new_w, new_h);
-		c->w = new_w;
-		c->h = new_h;
 	}
 }
 
 static void handle_button_release(XButtonEvent *start)
 {
+	struct client *c;
+	XWindowAttributes wa;
+
 	XUngrabPointer(dpy, CurrentTime);
-	start->subwindow = None;
 	
-	if (start->button == 1 || start->button == 3) {
-		struct client *c = client_find(start->window);
-		if (c) {
-			XWindowAttributes wa;
-			XGetWindowAttributes(dpy, c->win, &wa);
-			c->x = wa.x;
-			c->y = wa.y;
-			c->w = wa.width;
-			c->h = wa.height;
-		}
-	}
+	c = client_find(start->subwindow);
+	start->subwindow = None;
+
+	if (!c)
+		return;
+
+	if (!XGetWindowAttributes(dpy, c->win, &wa))
+		return;
+	
+	c->x = wa.x;
+	c->y = wa.y;
+	c->w = wa.width;
+	c->h = wa.height;
 }
 
 static void init_bar(void)
