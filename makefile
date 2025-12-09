@@ -1,7 +1,7 @@
 PREFIX?=/usr/X11R6
 CFLAGS?=-Os -pedantic -Wall -std=c99
-PROGRAM = minimalwm
-SRC = test.c
+PROGRAM = pico
+SRC = pico.c
 
 all: $(PROGRAM)
 
