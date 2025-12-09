@@ -203,7 +203,7 @@ void view_next_tab(const union arg *arg);
 void view_prev_tab(const union arg *arg);
 void focus_next_cli(const union arg *arg);
 void focus_prev_cli(const union arg *arg);
-void new_tab(const union arg *arg)
+void new_tab(const union arg *arg);
 #define XK_SHIFT	ShiftMask
 #define XK_LOCK		LockMask
 #define XK_CONTROL	ControlMask
