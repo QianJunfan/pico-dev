@@ -8,7 +8,7 @@
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 #define SUPER_MASK Mod4Mask
-#define IGNORE_MODS (LockMask | Mod2Mask) 
+#define IGNORE_MODS (Mod1Mask | LockMask | Mod2Mask | Mod3Mask | Mod5Mask) 
 
 void launch_xterm() {
     if (fork() == 0) {
