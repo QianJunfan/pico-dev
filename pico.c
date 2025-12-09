@@ -61,12 +61,6 @@ static int current_ws;
 static Window bar_win;
 static GC gc;
 
-static void spawn(const char *cmd);
-static int xerror(Display *dpy, XErrorEvent *er);
-static void updatenumlockmask(void);
-static void grabkeys(void);
-static void draw_bar(void);
-
 static struct client *client_find(Window w)
 {
 	int i;
@@ -378,18 +372,23 @@ static void handle_button_release(XButtonEvent *start)
 	XUngrabPointer(dpy, CurrentTime);
 	
 	c = client_find(start->subwindow);
-	start->subwindow = None;
 
-	if (!c)
+	if (!c) {
+		start->subwindow = None;
 		return;
+	}
 
-	if (!XGetWindowAttributes(dpy, c->win, &wa))
+	if (!XGetWindowAttributes(dpy, c->win, &wa)) {
+		start->subwindow = None;
 		return;
+	}
 	
 	c->x = wa.x;
 	c->y = wa.y;
 	c->w = wa.width;
 	c->h = wa.height;
+	
+	start->subwindow = None;
 }
 
 static void init_bar(void)
