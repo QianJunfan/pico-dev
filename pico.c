@@ -6,7 +6,7 @@
 #include <sys/wait.h>
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
-
+#include <X11/Xutil.h>
 enum mouse_mode {
 	MOUSE_MODE_NONE,
 	MOUSE_MODE_MOVE,
@@ -43,9 +43,12 @@ struct cli {
 	struct cli *prev;
 	struct mon *mon;
 	struct tab *tab;
-	int x, y, w, h;
-	int til_x, til_y, til_w, til_h;
-	int flt_x, flt_y, flt_w, flt_h;
+	int x, y;
+        unsigned int w, h;
+	int til_x, til_y; 
+        unsigned int til_w, til_h;
+	int flt_x, flt_y;
+        unsigned int flt_w, flt_h;
 
 	bool is_sel		: 1;
 	bool is_foc		: 1;
