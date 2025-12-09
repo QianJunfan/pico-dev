@@ -30,7 +30,6 @@ int main(void)
 
     
     launch_xterm();
-
     
     XGrabKey(dpy, XKeysymToKeycode(dpy, XStringToKeysym("F1")), ALT_MASK,
             DefaultRootWindow(dpy), True, GrabModeAsync, GrabModeAsync);
