@@ -62,6 +62,7 @@ static int current_ws;
 static Window bar_win;
 static GC gc;
 
+/* --- Function Prototypes --- */
 static struct client *client_find(Window w);
 static void client_set_border(struct client *c, unsigned long color);
 static void client_focus(struct client *c);
@@ -77,9 +78,7 @@ static void handle_destroy_notify(XEvent *e);
 static void handle_enter_notify(XEvent *e);
 static void handle_expose(XEvent *e);
 static void handle_key_press(XEvent *e);
-static void handle_button_press(XEvent *e, XButtonEvent *start);
-static void handle_motion_notify(XEvent *e, XButtonEvent *start);
-static void handle_button_release(XButtonEvent *start);
+static void start_move_resize(XEvent *e); /* NEW: Replaces button_press/motion_notify/button_release */
 static void init_bar(void);
 static void draw_bar(void);
 static void init_workspaces(void);
@@ -88,10 +87,11 @@ static void spawn(const char *cmd);
 static int xerror(Display *dpy, XErrorEvent *er);
 static void updatenumlockmask(void);
 
+/* ----------------- main ----------------- */
+
 int main(void)
 {
 	XEvent ev;
-	XButtonEvent start = {0};
 
 	if (!(dpy = XOpenDisplay(NULL)))
 		return 1;
@@ -124,13 +124,7 @@ int main(void)
 			handle_key_press(&ev);
 			break;
 		case EV_ButtonPress:
-			handle_button_press(&ev, &start);
-			break;
-		case EV_MotionNotify:
-			handle_motion_notify(&ev, &start);
-			break;
-		case EV_ButtonRelease:
-			handle_button_release(&start);
+			start_move_resize(&ev); /* Use the DWM-style grab loop */
 			break;
 		case EV_MapRequest:
 			handle_map_request(&ev);
@@ -150,9 +144,123 @@ int main(void)
 		case EV_Expose:
 			handle_expose(&ev);
 			break;
+		/* EV_MotionNotify and EV_ButtonRelease are now handled inside start_move_resize */
 		}
 	}
 }
+
+/* ----------------- Mouse Handling (DWM Style) ----------------- */
+
+static void start_move_resize(XEvent *e)
+{
+	XButtonEvent *be = &e->xbutton;
+	struct client *c;
+	XWindowAttributes wa;
+	XEvent ev;
+	
+	if (be->subwindow == None || be->subwindow == bar_win)
+		return;
+
+	c = client_find(be->subwindow);
+	if (!c)
+		return;
+
+	// 1. Focus the client and save starting geometry
+	client_focus(c);
+	
+	if (!XGetWindowAttributes(dpy, c->win, &wa))
+		return;
+
+	c->start_x = wa.x;
+	c->start_y = wa.y;
+	c->start_w = wa.width;
+	c->start_h = wa.height;
+	
+	// 2. Grab the pointer (if the modifier is pressed)
+	if (CLEANMASK(be->state) != MOD_MASK)
+		return;
+
+    // Use Button1 for move, Button3 for resize (as per grabkeys)
+    if (be->button != 1 && be->button != 3)
+        return;
+        
+	if (XGrabPointer(dpy, be->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess)
+		return;
+
+    // For resize (Button3), warp pointer to bottom-right for DWM-style resizing
+    if (be->button == 3) {
+        XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
+    }
+    
+	// 3. Enter the DWM-style continuous drag loop
+	do {
+		// Mask for mouse events (MotionNotify, ButtonRelease) and general WM events
+		XMaskEvent(dpy, MOUSE_MASK | ExposureMask | SubstructureRedirectMask, &ev);
+		
+		switch (ev.type) {
+		case EV_MotionNotify: {
+			XMotionEvent *me = &ev.xmotion;
+			int xdiff, ydiff;
+			int nx, ny, nw, nh;
+
+			// Check if the motion event is associated with the grab
+			if (me->window != c->win)
+				break;
+			
+			// Calculate displacement from initial press (be->x_root, be->y_root)
+			xdiff = me->x_root - be->x_root;
+			ydiff = me->y_root - be->y_root;
+			
+			if (be->button == 1) { /* Move Window */
+				nx = c->start_x + xdiff;
+				ny = c->start_y + ydiff;
+				XMoveWindow(dpy, c->win, nx, ny);
+                
+			} else if (be->button == 3) { /* Resize Window */
+				// DWM calculates new size based on root pointer position relative to original corner
+				nw = MAX(1, c->start_w + xdiff);
+				nh = MAX(1, c->start_h + ydiff);
+				XResizeWindow(dpy, c->win, nw, nh);
+			}
+			break;
+		}
+		
+		// Also dispatch other essential WM events while dragging
+		case EV_MapRequest:
+			handle_map_request(&ev);
+			break;
+		case EV_ConfigureRequest:
+			handle_configure_request(&ev);
+			break;
+		case EV_DestroyNotify:
+			handle_destroy_notify(&ev);
+			break;
+		case EV_UnmapNotify:
+			handle_unmap_notify(&ev);
+			break;
+		case EV_Expose:
+			handle_expose(&ev);
+			break;
+		}
+	} while (ev.type != EV_ButtonRelease); // Loop until mouse button is released
+
+	// 4. Cleanup after release
+	XUngrabPointer(dpy, CurrentTime);
+
+	// Update client geometry from current window state
+	if (XGetWindowAttributes(dpy, c->win, &wa)) {
+		c->x = wa.x;
+		c->y = wa.y;
+		c->w = wa.width;
+		c->h = wa.height;
+	}
+    
+    // Consume pending EnterNotify events (dwm logic)
+    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev)); 
+}
+
+
+/* ----------------- Other Functions (Definitions) ----------------- */
 
 static struct client *client_find(Window w)
 {
@@ -403,87 +511,6 @@ static void handle_key_press(XEvent *e)
 	}
 }
 
-static void handle_button_press(XEvent *e, XButtonEvent *start)
-{
-	struct client *c;
-	XWindowAttributes wa;
-	
-	if (e->xbutton.subwindow == None || e->xbutton.subwindow == bar_win)
-		return;
-
-	c = client_find(e->xbutton.subwindow);
-	if (!c)
-		return;
-
-	*start = e->xbutton;
-	client_focus(c);
-	
-	if (!XGetWindowAttributes(dpy, c->win, &wa))
-		return;
-
-	c->start_x = wa.x;
-	c->start_y = wa.y;
-	c->start_w = wa.width;
-	c->start_h = wa.height;
-	
-	XGrabPointer(dpy, start->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
-}
-
-static void handle_motion_notify(XEvent *e, XButtonEvent *start)
-{
-	struct client *c;
-	int xdiff, ydiff;
-	
-	if (start->subwindow == None)
-		return;
-
-	c = client_find(start->subwindow);
-	if (!c)
-		return;
-
-	xdiff = e->xmotion.x_root - start->x_root;
-	ydiff = e->xmotion.y_root - start->y_root;
-	
-	if (start->button == 1) {
-		int new_x = c->start_x + xdiff;
-		int new_y = c->start_y + ydiff;
-		
-		XMoveWindow(dpy, c->win, new_x, new_y);
-	} else if (start->button == 3) {
-		int new_w = MAX(1, c->start_w + xdiff);
-		int new_h = MAX(1, c->start_h + ydiff);
-		
-		XResizeWindow(dpy, c->win, new_w, new_h);
-	}
-}
-
-static void handle_button_release(XButtonEvent *start)
-{
-	struct client *c;
-	XWindowAttributes wa;
-
-	XUngrabPointer(dpy, CurrentTime);
-	
-	c = client_find(start->subwindow);
-
-	if (!c) {
-		start->subwindow = None;
-		return;
-	}
-
-	if (!XGetWindowAttributes(dpy, c->win, &wa)) {
-		start->subwindow = None;
-		return;
-	}
-	
-	c->x = wa.x;
-	c->y = wa.y;
-	c->w = wa.width;
-	c->h = wa.height;
-	
-	start->subwindow = None;
-}
-
 static void init_bar(void)
 {
 	bar_win = XCreateSimpleWindow(dpy, root, 0, 0, sw, BAR_HEIGHT, 0, 0, BAR_COLOR);
@@ -547,6 +574,7 @@ static void grabkeys(void)
 	XUngrabKey(dpy, AnyKey, AnyModifier, root);
 
 	for (j = 0; j < 4; j++) {
+		// Key grabs
 		if (k1) XGrabKey(dpy, k1, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		if (k2) XGrabKey(dpy, k2, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		if (k_quit) XGrabKey(dpy, k_quit, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
@@ -559,6 +587,7 @@ static void grabkeys(void)
 			if (k_ws) XGrabKey(dpy, k_ws, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		}
 
+		// Mouse grabs: Super + Button 1 for move, Super + Button 3 for resize
 		XGrabButton(dpy, 1, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
 		XGrabButton(dpy, 3, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
 	}
