@@ -39,6 +39,7 @@ struct client {
 	struct client *next;
 	Window win;
 	int ws_id;
+	int x, y, w, h;
 };
 
 struct workspace {
@@ -65,11 +66,6 @@ static void updatenumlockmask(void);
 static void grabkeys(void);
 static void draw_bar(void);
 
-static void client_set_border(struct client *c, unsigned long color)
-{
-	XSetWindowBorder(dpy, c->win, color);
-}
-
 static struct client *client_find(Window w)
 {
 	int i;
@@ -82,6 +78,11 @@ static struct client *client_find(Window w)
 		}
 	}
 	return NULL;
+}
+
+static void client_set_border(struct client *c, unsigned long color)
+{
+	XSetWindowBorder(dpy, c->win, color);
 }
 
 static void client_focus(struct client *c)
@@ -101,7 +102,7 @@ static void client_focus(struct client *c)
 	XSetInputFocus(dpy, c->win, RevertToParent, CurrentTime);
 }
 
-static void client_add(Window w)
+static void client_add(Window w, XWindowAttributes *wa)
 {
 	struct client *c;
 	struct client *new;
@@ -113,21 +114,28 @@ static void client_add(Window w)
 
 	new->win = w;
 	new->ws_id = current_ws;
+	new->x = wa->x;
+	new->y = wa->y;
+	new->w = wa->width;
+	new->h = wa->height;
 	new->next = ws->clients;
 	ws->clients = new;
 
 	XSetWindowBorderWidth(dpy, w, 1);
+	XSetWindowBorder(dpy, w, BORDER_NORMAL_COLOR);
 
 	client_focus(new);
 }
 
 static void client_remove(struct client *c)
 {
-	struct workspace *ws = &workspaces[c->ws_id];
+	struct workspace *ws;
 	struct client **cur;
 
 	if (!c)
 		return;
+
+	ws = &workspaces[c->ws_id];
 
 	if (ws->focus == c)
 		ws->focus = NULL;
@@ -140,7 +148,7 @@ static void client_remove(struct client *c)
 		}
 	}
 
-	if (c->ws_id == current_ws) {
+	if (ws->id == current_ws) {
 		if (!ws->focus && ws->clients)
 			client_focus(ws->clients);
 
@@ -221,8 +229,13 @@ static void handle_map_request(XEvent *e)
 	if (wa.override_redirect)
 		return;
 
-	client_add(ev->window);
 	XMoveResizeWindow(dpy, ev->window, 0, BAR_HEIGHT, sw, sh - BAR_HEIGHT);
+	wa.x = 0;
+	wa.y = BAR_HEIGHT;
+	wa.width = sw;
+	wa.height = sh - BAR_HEIGHT;
+	
+	client_add(ev->window, &wa);
 	XMapWindow(dpy, ev->window);
 }
 
@@ -302,38 +315,71 @@ static void handle_key_press(XEvent *e)
 	}
 }
 
-static void handle_button_press(XEvent *e, XWindowAttributes *attr, XButtonEvent *start)
+static void handle_button_press(XEvent *e, XButtonEvent *start)
 {
+	struct client *c;
+	
 	if (e->xbutton.subwindow == None || e->xbutton.subwindow == bar_win)
 		return;
-	
-	XGetWindowAttributes(dpy, e->xbutton.subwindow, attr);
+
+	c = client_find(e->xbutton.subwindow);
+	if (!c)
+		return;
+
 	*start = e->xbutton;
+	client_focus(c);
 	
-	client_focus(client_find(start->subwindow));
 	XGrabPointer(dpy, start->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
 }
 
-static void handle_motion_notify(XEvent *e, XWindowAttributes *attr, XButtonEvent *start)
+static void handle_motion_notify(XEvent *e, XButtonEvent *start)
 {
+	struct client *c;
+	int xdiff, ydiff;
+	
 	if (start->subwindow == None)
 		return;
 
-	int xdiff = e->xmotion.x_root - start->x_root;
-	int ydiff = e->xmotion.y_root - start->y_root;
+	c = client_find(start->subwindow);
+	if (!c)
+		return;
+
+	xdiff = e->xmotion.x_root - start->x_root;
+	ydiff = e->xmotion.y_root - start->y_root;
 	
 	if (start->button == 1) {
-		XMoveWindow(dpy, start->subwindow, attr->x + xdiff, attr->y + ydiff);
+		int new_x = c->x + xdiff;
+		int new_y = c->y + ydiff;
+		
+		XMoveWindow(dpy, c->win, new_x, new_y);
+		c->x = new_x;
+		c->y = new_y;
 	} else if (start->button == 3) {
-		XResizeWindow(dpy, start->subwindow, 
-			MAX(1, attr->width + xdiff), 
-			MAX(1, attr->height + ydiff));
+		int new_w = MAX(1, c->w + xdiff);
+		int new_h = MAX(1, c->h + ydiff);
+		
+		XResizeWindow(dpy, c->win, new_w, new_h);
+		c->w = new_w;
+		c->h = new_h;
 	}
 }
 
-static void handle_button_release(void)
+static void handle_button_release(XButtonEvent *start)
 {
 	XUngrabPointer(dpy, CurrentTime);
+	start->subwindow = None;
+	
+	if (start->button == 1 || start->button == 3) {
+		struct client *c = client_find(start->window);
+		if (c) {
+			XWindowAttributes wa;
+			XGetWindowAttributes(dpy, c->win, &wa);
+			c->x = wa.x;
+			c->y = wa.y;
+			c->w = wa.width;
+			c->h = wa.height;
+		}
+	}
 }
 
 static void init_bar(void)
@@ -447,7 +493,6 @@ static void updatenumlockmask(void)
 int main(void)
 {
 	XEvent ev;
-	XWindowAttributes attr = {0};
 	XButtonEvent start = {0};
 
 	if (!(dpy = XOpenDisplay(NULL)))
@@ -481,14 +526,13 @@ int main(void)
 			handle_key_press(&ev);
 			break;
 		case EV_ButtonPress:
-			handle_button_press(&ev, &attr, &start);
+			handle_button_press(&ev, &start);
 			break;
 		case EV_MotionNotify:
-			handle_motion_notify(&ev, &attr, &start);
+			handle_motion_notify(&ev, &start);
 			break;
 		case EV_ButtonRelease:
-			handle_button_release();
-			start.subwindow = None;
+			handle_button_release(&start);
 			break;
 		case EV_MapRequest:
 			handle_map_request(&ev);
