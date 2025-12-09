@@ -7,6 +7,7 @@
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include <X11/Xutil.h>
+
 enum mouse_mode {
 	MOUSE_MODE_NONE,
 	MOUSE_MODE_MOVE,
@@ -24,6 +25,7 @@ struct rule {
 
 union arg {
 	const void *ptr;
+	int i;
 };
 
 struct key {
@@ -72,7 +74,7 @@ struct tab {
 
 	uint64_t cli_til_cnt;
 	uint64_t til_cols, til_rows;
-	struct cli **clis_til;
+	struct cli **clis_til; /* Array of tiled clients */
 
 	uint64_t cli_flt_cnt;
 	struct cli *clis_flt;
@@ -167,6 +169,10 @@ void spawn(const union arg *arg);
 void killclient(const union arg *arg);
 void toggle_float(const union arg *arg);
 void quit_wm(const union arg *arg);
+void view_next_tab(const union arg *arg);
+void view_prev_tab(const union arg *arg);
+void focus_next_cli(const union arg *arg);
+void focus_prev_cli(const union arg *arg);
 
 /* ************************************************************************* */
 /* ** KEY BINDINGS AND FUNCTION IMPLEMENTATIONS ** */
@@ -187,11 +193,20 @@ static const char *termcmd[] = { "xterm", NULL };
 static const char *browsercmd[] = { "firefox", NULL };
 
 static const struct key keys[] = {
+	/* modifier,   keysym,      function,   argument */
 	{ XK_SUPER,   XK_Return,    spawn,      {.ptr = termcmd } },
 	{ XK_SUPER,   XK_w,         spawn,      {.ptr = browsercmd } },
 	{ XK_SUPER,   XK_c,         killclient, {0} },
 	{ XK_SUPER,   XK_f,         toggle_float, {0} },
 	{ XK_SUPER,   XK_q,         quit_wm,    {0} },
+
+	/* Tab navigation */
+	{ XK_SUPER,   XK_Right,     view_next_tab,  {0} },
+	{ XK_SUPER,   XK_Left,      view_prev_tab,  {0} },
+
+	/* Client focus */
+	{ XK_SUPER,   XK_j,         focus_next_cli, {0} },
+	{ XK_SUPER,   XK_k,         focus_prev_cli, {0} },
 };
 
 void spawn(const union arg *arg)
@@ -228,6 +243,59 @@ void quit_wm(const union arg *arg)
 	quit();
 }
 
+void view_next_tab(const union arg *arg)
+{
+	struct tab *t = runtime.tab_sel;
+	if (!t || !t->mon)
+		return;
+
+	struct tab *next = t->next ? t->next : t->mon->tabs;
+	if (next && next != t)
+		t_sel(next);
+}
+
+void view_prev_tab(const union arg *arg)
+{
+	struct tab *t = runtime.tab_sel;
+	if (!t || !t->mon)
+		return;
+
+	struct tab *prev = t->prev ? t->prev : t->mon->tabs;
+	if (prev && prev != t)
+		t_sel(prev);
+}
+
+void focus_next_cli(const union arg *arg)
+{
+	struct cli *c = runtime.cli_sel;
+	if (!c || !c->tab)
+		return;
+
+	struct cli *next = c->next ? c->next : c->tab->clis;
+
+	if (next && next != c)
+		c_sel(next);
+}
+
+void focus_prev_cli(const union arg *arg)
+{
+	struct cli *c = runtime.cli_sel;
+	if (!c || !c->tab)
+		return;
+
+	struct cli *prev;
+
+	if (c->prev) {
+		prev = c->prev;
+	} else {
+		prev = c->tab->clis;
+		while (prev && prev->next)
+			prev = prev->next;
+	}
+
+	if (prev && prev != c)
+		c_sel(prev);
+}
 
 /* ************************************************************************* */
 /* ** CORE EVENT HANDLERS AND SETUP/RUN/QUIT ** */
@@ -238,6 +306,39 @@ typedef void (*XEventHandler)(XEvent *);
 #define LAST_EVENT_TYPE 35
 
 static XEventHandler handler[LAST_EVENT_TYPE];
+
+/* Helper function for tiled client array management */
+static void c_til_append(struct cli *c, struct tab *t)
+{
+	c->tab = t;
+	t->cli_til_cnt++;
+	t->clis_til = realloc(t->clis_til, t->cli_til_cnt * sizeof(struct cli *));
+	t->clis_til[t->cli_til_cnt - 1] = c;
+}
+
+static void c_til_remove(struct cli *c)
+{
+	struct tab *t = c->tab;
+	uint64_t i;
+	
+	if (!t || !t->clis_til)
+		return;
+
+	for (i = 0; i < t->cli_til_cnt; i++) {
+		if (t->clis_til[i] == c) {
+			t->cli_til_cnt--;
+			if (t->cli_til_cnt > 0) {
+				for (; i < t->cli_til_cnt; i++)
+					t->clis_til[i] = t->clis_til[i + 1];
+				t->clis_til = realloc(t->clis_til, t->cli_til_cnt * sizeof(struct cli *));
+			} else {
+				free(t->clis_til);
+				t->clis_til = NULL;
+			}
+			return;
+		}
+	}
+}
 
 static struct cli *c_fetch(Window win)
 {
@@ -333,7 +434,7 @@ void c_detach_t(struct cli *c)
 	if (c->is_float) {
 		c_detach_flt(c);
 	} else if (c->is_tile) {
-		t->cli_til_cnt--;
+		c_til_remove(c);
 	}
 
 	if (c->prev)
@@ -576,8 +677,14 @@ void t_sel(struct tab *t)
 	if (t->mon)
 		m_sel(t->mon);
 
-	if (t->cli_sel)
+	/* TBD: Select the first client if none is selected */
+	if (!t->cli_sel && t->clis) {
+		c_sel(t->clis);
+	} else if (t->cli_sel) {
 		c_sel(t->cli_sel);
+	}
+	
+	m_update(t->mon);
 }
 
 void t_unsel(struct tab *t)
@@ -642,7 +749,10 @@ void c_tile(struct cli *c)
 	}
 
 	c->is_tile = true;
-	c->tab->cli_til_cnt++;
+	c_til_append(c, c->tab);
+
+	c_move(c, c->til_x, c->til_y);
+	c_resize(c, c->til_w, c->til_h);
 
 	m_update(c->mon);
 }
@@ -654,7 +764,7 @@ void c_float(struct cli *c)
 
 	if (c->is_tile) {
 		c->is_tile = false;
-		c->tab->cli_til_cnt--;
+		c_til_remove(c);
 	}
 
 	c->is_float = true;
@@ -663,6 +773,8 @@ void c_float(struct cli *c)
 	c_move(c, c->flt_x, c->flt_y);
 	c_resize(c, c->flt_w, c->flt_h);
 	c_raise(c);
+
+	m_update(c->mon);
 }
 
 void c_moveto_t(struct cli *c, struct tab *t)
@@ -672,8 +784,18 @@ void c_moveto_t(struct cli *c, struct tab *t)
 	if (!c || !t || c->tab == t)
 		return;
 
+	if (c->is_tile)
+		c_til_remove(c);
+	if (c->is_float)
+		c_detach_flt(c);
+
 	c_detach_t(c);
 	c_attach_t(c, t);
+
+	if (c->is_float)
+		c_attach_flt(c, t);
+	else
+		c_til_append(c, t);
 
 	m_update(m_old);
 	m_update(t->mon);
@@ -784,6 +906,7 @@ struct tab *t_init(struct mon *m)
 	t->cli_cnt = 0;
 	t->cli_til_cnt = 0;
 	t->is_sel = false;
+	t->clis_til = NULL;
 	
 	t_attach_m(t, m);
 	
@@ -866,6 +989,7 @@ void t_remove(struct tab *t)
 
 	t_detach_m(t);
 
+	free(t->clis_til);
 	free(t);
 
 	if (t_fallback)
@@ -938,14 +1062,16 @@ void m_destroy(struct mon *m)
 		m_sel(m_fallback);
 }
 
+/* Master-Stack Tiling Layout Implementation */
 void m_update(struct mon *m)
 {
 	struct tab *t;
-	struct cli *c, *master, *stack;
+	struct cli *c, *master;
 	uint64_t i;
 	int x, y, w, h;
 	int master_w, stack_w, stack_h;
 	int gap = 0;
+	uint64_t n_til;
 
 	if (!m)
 		return;
@@ -954,65 +1080,63 @@ void m_update(struct mon *m)
 	if (!t)
 		return;
 
+	n_til = t->cli_til_cnt;
+
+	/* Raise and show all floating clients */
 	for (c = t->clis_flt; c; c = c->next) {
 		if (c->is_hide)
 			c_show(c);
 		c_raise(c);
 	}
 
-	if (t->cli_til_cnt == 0)
+	if (n_til == 0)
 		goto end;
-
-	master = t->clis;
-	i = 0;
-	while (master && !master->is_tile) {
-		master = master->next;
-		i++;
-	}
-
-	if (!master)
-		goto end;
+	
+	/* Master client is the first tiled client in the array */
+	master = t->clis_til[0];
 
 	x = m->x + gap;
 	y = m->y + gap;
 	w = m->w - 2 * gap;
 	h = m->h - 2 * gap;
 
-	if (t->cli_til_cnt == 1) {
+	/* If only one tiled client, make it fullscreen */
+	if (n_til == 1) {
 		c_move(master, x, y);
 		c_resize(master, w, h);
-		goto show;
+		goto show_tiled;
 	}
 
+	/* Split into Master and Stack areas */
 	master_w = w * 55 / 100;
 	stack_w = w - master_w - gap;
 
+	/* Master window */
 	c_move(master, x, y);
 	c_resize(master, master_w - gap, h);
 
+	/* Stack windows */
 	x += master_w + gap;
-	stack = master->next;
-	stack_h = h / (t->cli_til_cnt - 1);
-	i = 0;
+	stack_h = h / (n_til - 1);
 
-	while (stack) {
-		if (stack->is_tile) {
-			c_move(stack, x, y + i * stack_h);
-			c_resize(stack, stack_w, stack_h - gap);
-			i++;
-		}
-		stack = stack->next;
+	for (i = 1; i < n_til; i++) {
+		c = t->clis_til[i];
+		c_move(c, x, y + (i - 1) * stack_h);
+		c_resize(c, stack_w, stack_h - gap);
 	}
 
-show:
-	stack = t->clis;
-	while (stack) {
-		if (stack->is_tile && stack->is_hide)
-			c_show(stack);
-		stack = stack->next;
+show_tiled:
+	/* Show all tiled clients and raise the selected one */
+	for (i = 0; i < n_til; i++) {
+		c = t->clis_til[i];
+		if (c->is_hide)
+			c_show(c);
 	}
+	if (t->cli_sel && t->cli_sel->is_tile)
+		c_raise(t->cli_sel);
 
 end:
+	/* Ensure a client is selected if available */
 	if (!t->cli_sel && t->clis)
 		c_sel(t->clis);
 }
