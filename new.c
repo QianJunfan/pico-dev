@@ -246,7 +246,7 @@ static const struct key keys[] = {
 
 	{ XK_SUPER,   XK_Right,     view_next_tab,  {0} },
 	{ XK_SUPER,   XK_Left,      view_prev_tab,  {0} },
-        { XK_SUPER,   XK_t,         new_tab         {0} },
+        { XK_SUPER,   XK_t,         new_tab,        {0} },
 	{ XK_SUPER,   XK_j,         focus_next_cli, {0} },
 	{ XK_SUPER,   XK_k,         focus_prev_cli, {0} },
 };
