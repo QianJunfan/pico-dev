@@ -1361,6 +1361,14 @@ static void handle_maprequest(XEvent *e)
 	c->flt_y = c->y;
 	c->flt_w = c->w;
 	c->flt_h = c->h;
+    
+    // 初始化拖拽数据，防止后续拖拽逻辑读取未初始化内存
+    c->drag_x = c->x;
+    c->drag_y = c->y;
+    c->drag_w = c->w;
+    c->drag_h = c->h;
+    c->drag_root_x = 0;
+    c->drag_root_y = 0;
 
 	c->is_float = (runtime.arrange_type == 1);
 
@@ -1371,11 +1379,12 @@ static void handle_maprequest(XEvent *e)
 	if ((wmh = XGetWMHints(t->mon->display, c->win)))
 		XFree(wmh);
 
-	// 修复：将 c_attach_t 提前到所有需要 c->mon 的操作之前
+	// 确保 c_attach_t 在 XSelectInput 之前调用，以设置 c->mon
 	c_attach_t(c, t); 
 
+	// 🚀 核心修复：添加 ButtonPressMask，允许 WM 接收鼠标点击事件
 	XSelectInput(c->mon->display, c->win,
-		EnterWindowMask | FocusChangeMask);
+		EnterWindowMask | FocusChangeMask | ButtonPressMask);
 
 	if (c->is_float) {
 		log_action("  Client is floating.");
@@ -1390,7 +1399,6 @@ static void handle_maprequest(XEvent *e)
 	c_sel(c);
 	m_update(t->mon);
 
-	// 修复：强制与 X Server 同步，解决 fatal IO error 104
     if (c->mon)
 	    XSync(c->mon->display, False); 
 }
