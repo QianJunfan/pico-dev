@@ -10,7 +10,7 @@
 #include <string.h>
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define MOD_MASK Mod4Mask // Super/Windows Key
+#define MOD_MASK Mod4Mask 
 #define MOUSE_MASK (ButtonPressMask|ButtonReleaseMask|PointerMotionMask)
 #define CLEANMASK(mask) (mask & ~(numlockmask|LockMask) & (ShiftMask|ControlMask|Mod1Mask|Mod2Mask|Mod3Mask|Mod4Mask|Mod5Mask))
 
@@ -41,8 +41,7 @@ struct client {
 	Window win;
 	int ws_id;
 	int x, y, w, h;
-	// start_* stores geometry at the beginning of the move/resize operation
-	int start_x, start_y, start_w, start_h; 
+	int start_x, start_y, start_w, start_h; 
 };
 
 struct workspace {
@@ -63,7 +62,6 @@ static int current_ws;
 static Window bar_win;
 static GC gc;
 
-/* --- Function Prototypes --- */
 static struct client *client_find(Window w);
 static void client_set_border(struct client *c, unsigned long color);
 static void client_focus(struct client *c);
@@ -79,7 +77,7 @@ static void handle_destroy_notify(XEvent *e);
 static void handle_enter_notify(XEvent *e);
 static void handle_expose(XEvent *e);
 static void handle_key_press(XEvent *e);
-static void start_move_resize(XEvent *e); 
+static void start_move_resize(XEvent *e); 
 static void init_bar(void);
 static void draw_bar(void);
 static void init_workspaces(void);
@@ -87,8 +85,6 @@ static void grabkeys(void);
 static void spawn(const char *cmd);
 static int xerror(Display *dpy, XErrorEvent *er);
 static void updatenumlockmask(void);
-
-/* ----------------- main ----------------- */
 
 int main(void)
 {
@@ -110,7 +106,6 @@ int main(void)
 	sw = DisplayWidth(dpy, screen);
 	sh = DisplayHeight(dpy, screen);
 
-	// Select for events on the root window (SubstructureRedirectMask is vital)
 	XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask | EnterWindowMask);
 	
 	init_workspaces();
@@ -126,7 +121,7 @@ int main(void)
 			handle_key_press(&ev);
 			break;
 		case EV_ButtonPress:
-			start_move_resize(&ev); 
+			start_move_resize(&ev); 
 			break;
 		case EV_MapRequest:
 			handle_map_request(&ev);
@@ -150,8 +145,6 @@ int main(void)
 	}
 }
 
-/* ----------------- Mouse Handling (DWM Style) ----------------- */
-
 static void start_move_resize(XEvent *e)
 {
 	XButtonEvent *be = &e->xbutton;
@@ -166,14 +159,11 @@ static void start_move_resize(XEvent *e)
 	if (!c)
 		return;
 
-	// Check if the correct modifier (Mod4Mask/Super) is pressed
 	if (CLEANMASK(be->state) != MOD_MASK)
 		return;
 
-	// Focus the client
 	client_focus(c);
 	
-	// Get and save starting geometry (c->start_x/y/w/h)
 	if (!XGetWindowAttributes(dpy, c->win, &wa))
 		return;
 
@@ -182,16 +172,13 @@ static void start_move_resize(XEvent *e)
 	c->start_w = wa.width;
 	c->start_h = wa.height;
 	
-	// Grab the pointer
 	if (XGrabPointer(dpy, be->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess)
 		return;
 
-    // For resize (Button3), warp pointer to bottom-right (DWM style)
-    if (be->button == 3) {
-        XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
-    }
-    
-	// Enter the continuous drag loop
+    if (be->button == 3) {
+        XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
+    }
+    
 	do {
 		XMaskEvent(dpy, MOUSE_MASK | ExposureMask | SubstructureRedirectMask, &ev);
 		
@@ -199,30 +186,25 @@ static void start_move_resize(XEvent *e)
 		case EV_MotionNotify: {
 			XMotionEvent *me = &ev.xmotion;
 			int xdiff, ydiff;
-			int nw, nh;
-
+			
 			if (me->window != c->win)
 				break;
 			
-			// Calculate displacement from initial press point (be->x_root)
 			xdiff = me->x_root - be->x_root;
 			ydiff = me->y_root - be->y_root;
 			
-			if (be->button == 1) { /* Move Window (Button 1) */
-				int nx = c->start_x + xdiff;
-				int ny = c->start_y + ydiff;
-				XMoveWindow(dpy, c->win, nx, ny);
-                
-			} else if (be->button == 3) { /* Resize Window (Button 3) */
-				// DWM-style resizing: New size = absolute current mouse position - fixed top-left anchor
-				nw = MAX(1, me->x_root - c->start_x); 
-				nh = MAX(1, me->y_root - c->start_y);
-				XResizeWindow(dpy, c->win, nw, nh);
+			if (be->button == 1) { 
+				c->x = c->start_x + xdiff;
+				c->y = c->start_y + ydiff;
+				XMoveWindow(dpy, c->win, c->x, c->y);
+			} else if (be->button == 3) { 
+				c->w = MAX(1, me->x_root - c->start_x); 
+				c->h = MAX(1, me->y_root - c->start_y);
+				XResizeWindow(dpy, c->win, c->w, c->h);
 			}
 			break;
 		}
 		
-		// Dispatch other events while dragging
 		case EV_MapRequest:
 			handle_map_request(&ev);
 			break;
@@ -239,25 +221,13 @@ static void start_move_resize(XEvent *e)
 			handle_expose(&ev);
 			break;
 		}
-	} while (ev.type != EV_ButtonRelease); // Loop until mouse button is released
+	} while (ev.type != EV_ButtonRelease);
 
-	// Cleanup after release
 	XUngrabPointer(dpy, CurrentTime);
 
-	// Update client geometry from current window state
-	if (XGetWindowAttributes(dpy, c->win, &wa)) {
-		c->x = wa.x;
-		c->y = wa.y;
-		c->w = wa.width;
-		c->h = wa.height;
-	}
-    
-    // Consume pending EnterNotify events (dwm logic)
-    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev)); 
+    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev)); 
 }
 
-
-/* ----------------- Other Functions (Definitions) ----------------- */
 
 static struct client *client_find(Window w)
 {
@@ -297,7 +267,6 @@ static void client_focus(struct client *c)
 
 static void client_add(Window w, XWindowAttributes *wa)
 {
-	struct client *c;
 	struct client *new;
 	struct workspace *ws = &workspaces[current_ws];
 
@@ -571,7 +540,6 @@ static void grabkeys(void)
 	XUngrabKey(dpy, AnyKey, AnyModifier, root);
 
 	for (j = 0; j < 4; j++) {
-		// Key grabs
 		if (k1) XGrabKey(dpy, k1, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		if (k2) XGrabKey(dpy, k2, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		if (k_quit) XGrabKey(dpy, k_quit, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
@@ -584,7 +552,6 @@ static void grabkeys(void)
 			if (k_ws) XGrabKey(dpy, k_ws, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		}
 
-		// Mouse grabs: Super + Button 1 for move, Super + Button 3 for resize
 		XGrabButton(dpy, 1, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
 		XGrabButton(dpy, 3, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
 	}
