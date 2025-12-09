@@ -769,7 +769,6 @@ void t_sel(struct tab *t)
 
 	m_update(t->mon);
 }
-
 void t_unsel(struct tab *t)
 {
 	struct cli *c;
@@ -784,13 +783,23 @@ void t_unsel(struct tab *t)
 		c_unsel(t->cli_sel);
 
 	// ----------------------------------------------------
+	// 隐藏所有客户端
 	for (c = t->clis; c; c = c->next) {
 		if (!c->is_hide) {
 			c_hide(c);
 		}
 	}
 	// ----------------------------------------------------
+    
+	// ----------------------------------------------------
+	// 关键修复：强制 X 服务器立即处理 UnmapWindow 请求，确保窗口隐藏
+	// ----------------------------------------------------
+	if (t->mon)
+		XSync(t->mon->display, False); 
+	// ----------------------------------------------------
 }
+
+
 void d_sel(struct cli *c)
 {
 	struct doc *d = &runtime.doc;
