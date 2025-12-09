@@ -812,16 +812,21 @@ void c_moveto_m(struct cli *c, struct mon *m)
 
 	c_moveto_t(c, m->tab_sel);
 }
-
 void c_kill(struct cli *c)
 {
         struct mon *m_old = c->mon;
         int n;
         Atom *protocols;
         bool supports_delete = false;
-
+        
+        // 1. 检查客户端和显示器指针是否有效
         if (!c || !c->win || !c->mon)
                 return;
+        
+        // 2. 保存显示器指针，防止在 detach 后丢失
+        Display *dpy = c->mon->display; 
+
+        // 3. 检查 WM_DELETE_WINDOW 协议
         if (XGetWMProtocols(c->mon->display, c->win, &protocols, &n))
         {
                 for (int i = 0; i < n; i++)
@@ -835,6 +840,7 @@ void c_kill(struct cli *c)
                 XFree(protocols);
         }
 
+        // 4. 如果支持协议，发送 ClientMessage 并返回
         if (supports_delete)
         {
                 XEvent ev;
@@ -850,14 +856,19 @@ void c_kill(struct cli *c)
                 return;
         }
 
-
+        // 5. 如果不支持协议，则强制关闭：
+        
+        // 将客户端从 Tab/Monitor 中分离
         c_detach_t(c);
 
+        // 使用之前保存的 dpy 指针来销毁窗口
         if (c->win)
-                XDestroyWindow(c->mon->display, c->win);
+                XDestroyWindow(dpy, c->win); 
 
+        // 释放客户端结构体内存
         free(c);
 
+        // 6. 更新旧显示器布局并重新选择
         m_update(m_old);
 
         if (runtime.mon_sel)
