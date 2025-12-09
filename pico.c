@@ -50,6 +50,11 @@ struct workspace {
 	struct client *focus;
 };
 
+static XWindowAttributes start_attr;
+static XButtonEvent start_event;
+static struct client *current_drag_client = NULL;
+
+
 static Display *dpy;
 static Window root;
 static int screen;
@@ -77,7 +82,9 @@ static void handle_destroy_notify(XEvent *e);
 static void handle_enter_notify(XEvent *e);
 static void handle_expose(XEvent *e);
 static void handle_key_press(XEvent *e);
-static void start_move_resize(XEvent *e);
+static void handle_button_press(XEvent *e);
+static void handle_motion_notify(XEvent *e);
+static void handle_button_release(XEvent *e);
 static void init_bar(void);
 static void draw_bar(void);
 static void init_workspaces(void);
@@ -121,7 +128,13 @@ int main(void)
 			handle_key_press(&ev);
 			break;
 		case EV_ButtonPress:
-			start_move_resize(&ev);
+			handle_button_press(&ev);
+			break;
+		case EV_MotionNotify:
+			handle_motion_notify(&ev);
+			break;
+		case EV_ButtonRelease:
+			handle_button_release(&ev);
 			break;
 		case EV_MapRequest:
 			handle_map_request(&ev);
@@ -145,82 +158,65 @@ int main(void)
 	}
 }
 
-static void start_move_resize(XEvent *e)
+static void handle_button_press(XEvent *e)
 {
-	XButtonEvent *be = &e->xbutton;
-	struct client *c;
-	XWindowAttributes wa;
-	XEvent ev;
-	
-	if (be->subwindow == None || be->subwindow == bar_win)
-		return;
+    XButtonEvent *be = &e->xbutton;
+    
+    if (be->subwindow == None || be->subwindow == bar_win)
+        return;
 
-	c = client_find(be->subwindow);
-	if (!c)
-		return;
+    if (CLEANMASK(be->state) != MOD_MASK)
+        return;
 
-    // 检查按键修饰符是否匹配 Mod4Mask (Super Key)
-	if (CLEANMASK(be->state) != MOD_MASK)
-		return;
+    current_drag_client = client_find(be->subwindow);
+    if (!current_drag_client)
+        return;
+    
+    client_focus(current_drag_client);
+    XGetWindowAttributes(dpy, be->subwindow, &start_attr);
+    start_event = *be;
 
-	client_focus(c);
-	
-	if (!XGetWindowAttributes(dpy, c->win, &wa))
-		return;
-
-	c->start_x = wa.x;
-	c->start_y = wa.y;
-	c->start_w = wa.width;
-	c->start_h = wa.height;
-	
-	// 在客户端窗口上抓取指针，而不是在根窗口
-	if (XGrabPointer(dpy, c->win, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess)
-		return;
-
-    // 如果是鼠标中键 (Button 2) 或右键 (Button 3) 启动缩放
-	if (be->button == 3) { 
-        // 将鼠标指针移动到窗口的右下角，以便更容易开始缩放
-		XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
-	}
-	
-	do {
-		// 仅掩蔽拖动和释放事件，减少不必要的事件处理
-		XMaskEvent(dpy, MOUSE_MASK, &ev);
-		
-		switch (ev.type) {
-		case EV_MotionNotify: {
-			XMotionEvent *me = &ev.xmotion;
-			int xdiff, ydiff;
-			
-			if (me->window != c->win)
-				break;
-			
-			xdiff = me->x_root - be->x_root;
-			ydiff = me->y_root - be->y_root;
-			
-			if (be->button == 1) { // 移动 (Super + Left Click)
-				c->x = c->start_x + xdiff;
-				c->y = c->start_y + ydiff;
-				XMoveWindow(dpy, c->win, c->x, c->y);
-			} else if (be->button == 3) { // 缩放 (Super + Right Click)
-				c->w = MAX(1, c->start_w + xdiff); // 修正：基于起始宽度和拖动差值计算新宽度
-				c->h = MAX(1, c->start_h + ydiff); // 修正：基于起始高度和拖动差值计算新高度
-				XResizeWindow(dpy, c->win, c->w, c->h);
-			}
-			break;
-		}
-        
-        // 在拖动/缩放循环中，不应该处理 Map/Configure/Destroy 等其他事件，否则可能导致逻辑混乱或死锁
-        // 任何被 XMaskEvent 捕获但未处理的事件都会被留给主循环处理。
-		}
-	} while (ev.type != EV_ButtonRelease);
-
-	XUngrabPointer(dpy, CurrentTime);
-
-    // 清理掉任何积累的 EnterNotify 事件
-	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
+    if (XGrabPointer(dpy, be->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess) {
+        current_drag_client = NULL;
+        return;
+    }
 }
 
+static void handle_motion_notify(XEvent *e)
+{
+    XMotionEvent *me = &e->xmotion;
+    
+    if (current_drag_client == NULL)
+        return;
+    
+    if (me->window != current_drag_client->win)
+        return;
+
+    int xdiff = me->x_root - start_event.x_root;
+    int ydiff = me->y_root - start_event.y_root;
+
+    if (start_event.button == 1) { 
+        current_drag_client->x = start_attr.x + xdiff;
+        current_drag_client->y = start_attr.y + ydiff;
+        XMoveWindow(dpy, current_drag_client->win, current_drag_client->x, current_drag_client->y);
+    } else if (start_event.button == 3) { 
+        current_drag_client->w = MAX(1, start_attr.width + xdiff);
+        current_drag_client->h = MAX(1, start_attr.height + ydiff);
+        XResizeWindow(dpy, current_drag_client->win, current_drag_client->w, current_drag_client->h);
+    }
+}
+
+static void handle_button_release(XEvent *e)
+{
+    if (current_drag_client == NULL)
+        return;
+
+    XUngrabPointer(dpy, CurrentTime);
+    current_drag_client = NULL;
+
+    XEvent ev;
+    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
+}
 
 static struct client *client_find(Window w)
 {
@@ -535,7 +531,6 @@ static void grabkeys(void)
 {
 	updatenumlockmask();
 	unsigned int j;
-	// 修正：这是标准 Xlib 抓取修饰符，确保 NumLock/Caps Lock 状态不影响 MOD_MASK (Super Key)
 	unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask|LockMask, Mod2Mask, Mod2Mask|LockMask, Mod2Mask|numlockmask, Mod2Mask|numlockmask|LockMask };
 	KeyCode k1 = XKeysymToKeycode(dpy, XK_F1);
 	KeyCode k2 = XKeysymToKeycode(dpy, XK_F2);
@@ -560,9 +555,7 @@ static void grabkeys(void)
 			if (k_ws) XGrabKey(dpy, k_ws, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
 		}
 
-        // 关键修复：在根窗口抓取 Super + 鼠标左键 (Button 1) 用于移动
 		XGrabButton(dpy, 1, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
-        // 关键修复：在根窗口抓取 Super + 鼠标右键 (Button 3) 用于缩放
 		XGrabButton(dpy, 3, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
 	}
 }
@@ -589,8 +582,4 @@ static void updatenumlockmask(void)
 	numlockmask = 0;
 	modmap = XGetModifierMapping(dpy);
 	for (i = 0; i < 8; i++)
-		for (j = 0; j < modmap->max_keypermod; j++)
-			if (modmap->modifiermap[i * modmap->max_keypermod + j] == XKeysymToKeycode(dpy, XK_Num_Lock))
-				numlockmask = (1 << i);
-	XFreeModifiermap(modmap);
-}
+		for (j = 0; j < modmap->max_keypermod
