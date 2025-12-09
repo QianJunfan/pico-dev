@@ -13,9 +13,7 @@
 
 void launch_xterm() {
     if (fork() == 0) {
-        close(STDIN_FILENO);
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
+        setsid();
         execlp("xterm", "xterm", NULL);
         perror("Failed to launch xterm");
         _exit(EXIT_FAILURE); 
@@ -84,7 +82,7 @@ int main(void)
         else if(ev.type == MotionNotify && start.subwindow != None)
         {
             int xdiff = ev.xbutton.x_root - start.x_root;
-            int ydiff = ev.xbutton.y_root - start.x_root;
+            int ydiff = ev.xbutton.y_root - start.y_root;
             XMoveResizeWindow(dpy, start.subwindow,
                 attr.x + (start.button==1 ? xdiff : 0),
                 attr.y + (start.button==1 ? ydiff : 0),
