@@ -1250,6 +1250,30 @@ static void handle_maprequest(XEvent *e)
     if (c->mon)
 	    XSync(c->mon->display, False); 
 }
+static void handle_destroynotify(XEvent *e)
+{
+	XDestroyWindowEvent *ev = &e->xdestroywindow;
+	struct cli *c;
+	struct mon *m_old;
+
+	if (!(c = c_fetch(ev->window)))
+		return;
+
+	m_old = c->mon;
+
+	if (c->tab) {
+		c_detach_t(c);
+	} else {
+		c_detach_d(c);
+	}
+
+	free(c);
+
+	if (m_old)
+		m_update(m_old);
+	else
+		m_sel(runtime.mon_sel);
+}
 
 static void handle_enternotify(XEvent *e)
 {
