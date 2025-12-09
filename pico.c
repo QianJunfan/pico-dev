@@ -4,11 +4,29 @@
 #include <stdio.h> 
 #include <stdlib.h> 
 #include <unistd.h> 
+#include <X11/XF86keysym.h>
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 #define SUPER_MASK Mod4Mask
-#define IGNORE_MODS (Mod1Mask | LockMask | Mod2Mask | Mod3Mask | Mod5Mask) 
+
+static const unsigned int ignore_mods[] = {
+    0,
+    LockMask,
+    Mod2Mask,
+    Mod3Mask,
+    Mod5Mask,
+    LockMask | Mod2Mask,
+    LockMask | Mod3Mask,
+    LockMask | Mod5Mask,
+    Mod2Mask | Mod3Mask,
+    Mod2Mask | Mod5Mask,
+    Mod3Mask | Mod5Mask,
+    LockMask | Mod2Mask | Mod3Mask,
+    LockMask | Mod2Mask | Mod5Mask,
+    Mod2Mask | Mod3Mask | Mod5Mask,
+    LockMask | Mod2Mask | Mod3Mask | Mod5Mask
+};
 
 void launch_xterm() {
     if (fork() == 0) {
@@ -18,6 +36,29 @@ void launch_xterm() {
         _exit(EXIT_FAILURE);
     }
 }
+
+void grab_input(Display *dpy)
+{
+    unsigned int i;
+    KeyCode keycode_f1 = XKeysymToKeycode(dpy, XStringToKeysym("F1"));
+    
+    for (i = 0; i < sizeof(ignore_mods) / sizeof(ignore_mods[0]); i++) {
+        
+        unsigned int mod = SUPER_MASK | ignore_mods[i];
+        
+        if (keycode_f1) {
+             XGrabKey(dpy, keycode_f1, mod,
+                 DefaultRootWindow(dpy), True, GrabModeAsync, GrabModeAsync);
+        }
+
+        XGrabButton(dpy, 1, mod, DefaultRootWindow(dpy), True,
+                ButtonPressMask|ButtonReleaseMask|PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
+        
+        XGrabButton(dpy, 3, mod, DefaultRootWindow(dpy), True,
+                ButtonPressMask|ButtonReleaseMask|PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
+    }
+}
+
 
 int main(void)
 {
@@ -31,14 +72,8 @@ int main(void)
     
     launch_xterm();
     
-    XGrabKey(dpy, XKeysymToKeycode(dpy, XStringToKeysym("F1")), SUPER_MASK,
-            DefaultRootWindow(dpy), True, GrabModeAsync, GrabModeAsync);
-    
-    XGrabButton(dpy, 1, SUPER_MASK, DefaultRootWindow(dpy), True,
-            ButtonPressMask|ButtonReleaseMask|PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
-    
-    XGrabButton(dpy, 3, SUPER_MASK, DefaultRootWindow(dpy), True,
-            ButtonPressMask|ButtonReleaseMask|PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
+    grab_input(dpy);
+
 
     start.subwindow = None;
     for(;;)
@@ -49,11 +84,9 @@ int main(void)
         if(ev.type == KeyPress)
         {
             
-            unsigned int clean_state = ev.xkey.state & ~IGNORE_MODS;
             KeySym keysym = XkbKeycodeToKeysym(dpy, ev.xkey.keycode, 0, 0);
 
-            
-            if (keysym == XK_F1 && (clean_state == SUPER_MASK)) {
+            if (keysym == XK_F1 && (ev.xkey.state & SUPER_MASK)) {
                  if(ev.xkey.subwindow != None)
                     XRaiseWindow(dpy, ev.xkey.subwindow);
             }
@@ -63,9 +96,7 @@ int main(void)
         else if(ev.type == ButtonPress && ev.xbutton.subwindow != None)
         {
             
-            unsigned int clean_state = ev.xbutton.state & ~IGNORE_MODS;
-
-            if (clean_state == SUPER_MASK)
+            if (ev.xbutton.state & SUPER_MASK)
             {
                 XGetWindowAttributes(dpy, ev.xbutton.subwindow, &attr);
                 start = ev.xbutton;
