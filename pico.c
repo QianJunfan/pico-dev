@@ -842,7 +842,7 @@ static void checkotherwm(void) {
 	XSetErrorHandler(xerror);
 	XSync(dpy, False);
 }
-static int xerrorstart(Display *dpy, XErrorEvent *ee) { 
+int xerrorstart(Display *dpy, XErrorEvent *ee) { 
         die("dwm: another window manager is already running"); 
         return -1; 
 }
