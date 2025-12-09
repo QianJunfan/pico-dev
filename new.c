@@ -176,7 +176,7 @@ xerror(Display *dpy, XErrorEvent *ee)
 	|| (ee->request_code == X_GrabKey && ee->error_code == BadAccess)
     
     // 6. 忽略常见的绘图和边框设置错误
-	|| (ee->request_code == X_SetWindowBorder && ee->error_code == BadAccess)
+	|| (ee->request_code == XSetWindowBorder && ee->error_code == BadAccess)
 	|| (ee->request_code == X_PolyText8 && ee->error_code == BadDrawable)
 	|| (ee->request_code == X_PolyText16 && ee->error_code == BadDrawable)
 	|| (ee->request_code == X_ImageText8 && ee->error_code == BadDrawable)
