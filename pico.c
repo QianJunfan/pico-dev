@@ -61,6 +61,98 @@ static int current_ws;
 static Window bar_win;
 static GC gc;
 
+static struct client *client_find(Window w);
+static void client_set_border(struct client *c, unsigned long color);
+static void client_focus(struct client *c);
+static void client_add(Window w, XWindowAttributes *wa);
+static void client_remove(struct client *c);
+static void focus_next_client(void);
+static void focus_prev_client(void);
+static void switch_workspace(int new_ws);
+static void handle_map_request(XEvent *e);
+static void handle_unmap_notify(XEvent *e);
+static void handle_configure_request(XEvent *e);
+static void handle_destroy_notify(XEvent *e);
+static void handle_enter_notify(XEvent *e);
+static void handle_expose(XEvent *e);
+static void handle_key_press(XEvent *e);
+static void handle_button_press(XEvent *e, XButtonEvent *start);
+static void handle_motion_notify(XEvent *e, XButtonEvent *start);
+static void handle_button_release(XButtonEvent *start);
+static void init_bar(void);
+static void draw_bar(void);
+static void init_workspaces(void);
+static void grabkeys(void);
+static void spawn(const char *cmd);
+static int xerror(Display *dpy, XErrorEvent *er);
+static void updatenumlockmask(void);
+
+int main(void)
+{
+	XEvent ev;
+	XButtonEvent start = {0};
+
+	if (!(dpy = XOpenDisplay(NULL)))
+		return 1;
+
+	XSetErrorHandler(xerror);
+	
+	struct sigaction sa;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESTART;
+	sa.sa_handler = SIG_IGN;
+	sigaction(SIGCHLD, &sa, NULL);
+
+	screen = DefaultScreen(dpy);
+	root = RootWindow(dpy, screen);
+	sw = DisplayWidth(dpy, screen);
+	sh = DisplayHeight(dpy, screen);
+
+	XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask | EnterWindowMask);
+	
+	init_workspaces();
+	init_bar();
+	grabkeys();
+	spawn("xterm");
+
+	for (;;) {
+		XNextEvent(dpy, &ev);
+		
+		switch (ev.type) {
+		case EV_KeyPress:
+			handle_key_press(&ev);
+			break;
+		case EV_ButtonPress:
+			handle_button_press(&ev, &start);
+			break;
+		case EV_MotionNotify:
+			handle_motion_notify(&ev, &start);
+			break;
+		case EV_ButtonRelease:
+			handle_button_release(&start);
+			break;
+		case EV_MapRequest:
+			handle_map_request(&ev);
+			break;
+		case EV_ConfigureRequest:
+			handle_configure_request(&ev);
+			break;
+		case EV_UnmapNotify:
+			handle_unmap_notify(&ev);
+			break;
+		case EV_DestroyNotify:
+			handle_destroy_notify(&ev);
+			break;
+		case EV_EnterNotify:
+			handle_enter_notify(&ev);
+			break;
+		case EV_Expose:
+			handle_expose(&ev);
+			break;
+		}
+	}
+}
+
 static struct client *client_find(Window w)
 {
 	int i;
@@ -486,7 +578,7 @@ static int xerror(Display *dpy, XErrorEvent *er)
 	return 0;
 }
 
-void updatenumlockmask(void)
+static void updatenumlockmask(void)
 {
 	unsigned int i, j;
 	XModifierKeymap *modmap;
@@ -497,70 +589,4 @@ void updatenumlockmask(void)
 			if (modmap->modifiermap[i * modmap->max_keypermod + j] == XKeysymToKeycode(dpy, XK_Num_Lock))
 				numlockmask = (1 << i);
 	XFreeModifiermap(modmap);
-}
-
-int main(void)
-{
-	XEvent ev;
-	XButtonEvent start = {0};
-
-	if (!(dpy = XOpenDisplay(NULL)))
-		return 1;
-
-	XSetErrorHandler(xerror);
-	
-	struct sigaction sa;
-	sigemptyset(&sa.sa_mask);
-	sa.sa_flags = SA_NOCLDSTOP | SA_NOCLDWAIT | SA_RESTART;
-	sa.sa_handler = SIG_IGN;
-	sigaction(SIGCHLD, &sa, NULL);
-
-	screen = DefaultScreen(dpy);
-	root = RootWindow(dpy, screen);
-	sw = DisplayWidth(dpy, screen);
-	sh = DisplayHeight(dpy, screen);
-
-	XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask | EnterWindowMask);
-	
-	init_workspaces();
-	init_bar();
-	grabkeys();
-	spawn("xterm");
-
-	for (;;) {
-		XNextEvent(dpy, &ev);
-		
-		switch (ev.type) {
-		case EV_KeyPress:
-			handle_key_press(&ev);
-			break;
-		case EV_ButtonPress:
-			handle_button_press(&ev, &start);
-			break;
-		case EV_MotionNotify:
-			handle_motion_notify(&ev, &start);
-			break;
-		case EV_ButtonRelease:
-			handle_button_release(&start);
-			break;
-		case EV_MapRequest:
-			handle_map_request(&ev);
-			break;
-		case EV_ConfigureRequest:
-			handle_configure_request(&ev);
-			break;
-		case EV_UnmapNotify:
-			handle_unmap_notify(&ev);
-			break;
-		case EV_DestroyNotify:
-			handle_destroy_notify(&ev);
-			break;
-		case EV_EnterNotify:
-			handle_enter_notify(&ev);
-			break;
-		case EV_Expose:
-			handle_expose(&ev);
-			break;
-		}
-	}
 }
