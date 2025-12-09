@@ -127,7 +127,7 @@ static int xerror(Display *dpy, XErrorEvent *ee);
 static int xerror(Display *dpy, XErrorEvent *ee)
 {
     // 如果错误发生在 Root Window 上，并且是 BadAccess（权限不足），则很可能意味着抢占失败
-	if (ee->error_code == BadAccess && ee->request_code == X_ChangeWindowAttributes
+	if (ee->error_code == BadAccess && ee->request_code == XChangeWindowAttributes
         && ee->resourceid == RootWindow(dpy, DefaultScreen(dpy)))
 	{
 		fprintf(stderr, "pico: fatal: another window manager is running\n");
