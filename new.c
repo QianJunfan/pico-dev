@@ -1195,7 +1195,6 @@ static void key_handle(XEvent *e)
 		}
 	}
 }
-
 static void handle_maprequest(XEvent *e)
 {
 	XMapRequestEvent *ev = &e->xmaprequest;
@@ -1206,44 +1205,55 @@ static void handle_maprequest(XEvent *e)
 	Window trans = None;
 	XWMHints *wmh;
 
-	if (!t || !t->mon->display || c_fetch(ev->window))
+	// 1. 初始检查
+	// 确保有选定的 Tab/Monitor，且窗口不是已知的客户端
+	if (!t || !t->mon || !t->mon->display || c_fetch(ev->window))
 		return;
 
+	// 检查窗口属性
 	if (!XGetWindowAttributes(t->mon->display, ev->window, &wa))
 		return;
 
-	if (wa.override_redirect)
+	if (wa.override_redirect) // 忽略 override_redirect 窗口（如菜单、提示框）
 		return;
 
+	// 2. 客户端结构体分配和基础设置
 	c = calloc(1, sizeof(*c));
 	if (!c)
 		return;
 
 	c->win = ev->window;
 
+	// 3. 获取几何信息
 	XGetGeometry(t->mon->display, c->win, &wa.root,
 		&c->x, &c->y, &c->w, &c->h,
 		&wa.border_width, &depth);
 
+	// 4. 初始化浮动尺寸/位置
 	c->flt_x = c->x;
 	c->flt_y = c->y;
 	c->flt_w = c->w;
 	c->flt_h = c->h;
 
+	// 5. 确定浮动状态
 	c->is_float = (runtime.arrange_type == 1);
 
 	if (XGetTransientForHint(t->mon->display, c->win, &trans) && trans != None) {
-		c->is_float = true;
+		c->is_float = true; // 瞬态窗口默认浮动
 	}
 
 	if ((wmh = XGetWMHints(t->mon->display, c->win)))
 		XFree(wmh);
 
-	c_attach_t(c, t);
+	// 6. 核心修复：连接客户端到 Tab/Monitor
+	// 必须在第一次使用 c->mon 之前调用！
+	c_attach_t(c, t); 
 
+	// 7. 选择输入事件（现在 c->mon->display 是有效的）
 	XSelectInput(c->mon->display, c->win,
 		EnterWindowMask | FocusChangeMask);
 
+	// 8. 窗口布局和映射
 	if (c->is_float)
 		c_float(c);
 	else
@@ -1253,7 +1263,6 @@ static void handle_maprequest(XEvent *e)
 	c_sel(c);
 	m_update(t->mon);
 }
-
 static void handle_destroynotify(XEvent *e)
 {
 	XDestroyWindowEvent *ev = &e->xdestroywindow;
