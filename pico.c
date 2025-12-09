@@ -165,7 +165,8 @@ static void handle_button_press(XEvent *e)
     if (be->subwindow == None || be->subwindow == bar_win)
         return;
 
-    if (CLEANMASK(be->state) != MOD_MASK)
+    // 关键修复：检查 MOD_MASK 是否存在于 CLEANMASK 后的状态中
+    if (!(CLEANMASK(be->state) & MOD_MASK))
         return;
 
     current_drag_client = client_find(be->subwindow);
