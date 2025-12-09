@@ -43,6 +43,8 @@ static int current_ws = 0;
 static Window bar_win;
 static GC gc;
 
+
+
 void spawn(const char *cmd) {
     if (fork() == 0) {
         if (dpy) close(ConnectionNumber(dpy));
@@ -95,6 +97,29 @@ void client_add(Window w) {
     XSetInputFocus(dpy, w, RevertToParent, CurrentTime);
 }
 
+
+void draw_bar(void) {
+    char buf[64];
+    int x = 5;
+
+    XSetForeground(dpy, gc, BAR_COLOR);
+    XFillRectangle(dpy, bar_win, gc, 0, 0, sw, BAR_HEIGHT);
+
+    for (int i = 0; i < NUM_WORKSPACES; i++) {
+        if (i == current_ws) {
+            XSetForeground(dpy, gc, BAR_FOCUS_COLOR);
+            XFillRectangle(dpy, bar_win, gc, x - 2, 2, 14, BAR_HEIGHT - 4);
+        }
+
+        XSetForeground(dpy, gc, BAR_TEXT_COLOR);
+        snprintf(buf, sizeof(buf), "%d", i + 1);
+        XDrawString(dpy, bar_win, gc, x, 15, buf, 1);
+        x += 20;
+    }
+
+    snprintf(buf, sizeof(buf), "Win: %d", workspaces[current_ws].count);
+    XDrawString(dpy, bar_win, gc, sw - 100, 15, buf, strlen(buf));
+}
 void client_remove(Window w) {
     for (int k = 0; k < NUM_WORKSPACES; k++) {
         Workspace *ws = &workspaces[k];
@@ -249,28 +274,7 @@ void init_bar(void) {
     XSetForeground(dpy, gc, BAR_TEXT_COLOR);
 }
 
-void draw_bar(void) {
-    char buf[64];
-    int x = 5;
 
-    XSetForeground(dpy, gc, BAR_COLOR);
-    XFillRectangle(dpy, bar_win, gc, 0, 0, sw, BAR_HEIGHT);
-
-    for (int i = 0; i < NUM_WORKSPACES; i++) {
-        if (i == current_ws) {
-            XSetForeground(dpy, gc, BAR_FOCUS_COLOR);
-            XFillRectangle(dpy, bar_win, gc, x - 2, 2, 14, BAR_HEIGHT - 4);
-        }
-
-        XSetForeground(dpy, gc, BAR_TEXT_COLOR);
-        snprintf(buf, sizeof(buf), "%d", i + 1);
-        XDrawString(dpy, bar_win, gc, x, 15, buf, 1);
-        x += 20;
-    }
-
-    snprintf(buf, sizeof(buf), "Win: %d", workspaces[current_ws].count);
-    XDrawString(dpy, bar_win, gc, sw - 100, 15, buf, strlen(buf));
-}
 
 void init_workspaces(void) {
     for (int i = 0; i < NUM_WORKSPACES; i++) {
