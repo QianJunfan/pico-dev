@@ -2,6 +2,7 @@
 #include <X11/keysym.h>
 #include <X11/XKBlib.h>
 #include <X11/Xatom.h>
+#include <X11/cursorfont.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/wait.h>
@@ -23,6 +24,13 @@
 #define BORDER_NORMAL_COLOR 0x000000
 #define BORDER_WIDTH 1
 
+typedef union {
+	int i;
+	unsigned int ui;
+	float f;
+	const void *v;
+} Arg;
+
 enum {
 	EV_KeyPress = 2,
 	EV_ButtonPress,
@@ -36,12 +44,14 @@ enum {
 	EV_Expose = 12
 };
 
+enum { CurNormal, CurResize, CurMove, CurLast }; 
+
 struct client {
 	struct client *next;
 	Window win;
 	int ws_id;
 	int x, y, w, h;
-	int start_x, start_y, start_w, start_h;
+	int oldx, oldy, oldw, oldh;
 };
 
 struct workspace {
@@ -49,11 +59,6 @@ struct workspace {
 	struct client *clients;
 	struct client *focus;
 };
-
-static XWindowAttributes start_attr;
-static XButtonEvent start_event;
-static struct client *current_drag_client = NULL;
-
 
 static Display *dpy;
 static Window root;
@@ -67,6 +72,8 @@ static int current_ws;
 static Window bar_win;
 static GC gc;
 
+static Cursor cursor[CurLast];
+
 static struct client *client_find(Window w);
 static void client_set_border(struct client *c, unsigned long color);
 static void client_focus(struct client *c);
@@ -75,6 +82,11 @@ static void client_remove(struct client *c);
 static void focus_next_client(void);
 static void focus_prev_client(void);
 static void switch_workspace(int new_ws);
+static int getrootptr(int *x, int *y);
+static void resizeclient(struct client *c, int x, int y, int w, int h);
+static void resize(struct client *c, int x, int y, int w, int h, int interact);
+static void movemouse(const Arg *arg);
+static void resizemouse(const Arg *arg);
 static void handle_map_request(XEvent *e);
 static void handle_unmap_notify(XEvent *e);
 static void handle_configure_request(XEvent *e);
@@ -83,8 +95,6 @@ static void handle_enter_notify(XEvent *e);
 static void handle_expose(XEvent *e);
 static void handle_key_press(XEvent *e);
 static void handle_button_press(XEvent *e);
-static void handle_motion_notify(XEvent *e);
-static void handle_button_release(XEvent *e);
 static void init_bar(void);
 static void draw_bar(void);
 static void init_workspaces(void);
@@ -113,6 +123,10 @@ int main(void)
 	sw = DisplayWidth(dpy, screen);
 	sh = DisplayHeight(dpy, screen);
 
+	cursor[CurNormal] = XCreateFontCursor(dpy, XC_left_ptr);
+	cursor[CurResize] = XCreateFontCursor(dpy, XC_sizing);
+	cursor[CurMove] = XCreateFontCursor(dpy, XC_fleur);
+
 	XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask | EnterWindowMask);
 	
 	init_workspaces();
@@ -129,12 +143,6 @@ int main(void)
 			break;
 		case EV_ButtonPress:
 			handle_button_press(&ev);
-			break;
-		case EV_MotionNotify:
-			handle_motion_notify(&ev);
-			break;
-		case EV_ButtonRelease:
-			handle_button_release(&ev);
 			break;
 		case EV_MapRequest:
 			handle_map_request(&ev);
@@ -158,65 +166,177 @@ int main(void)
 	}
 }
 
+static int getrootptr(int *x, int *y)
+{
+	int di;
+	unsigned int dui;
+	Window dummy;
+
+	return XQueryPointer(dpy, root, &dummy, &dummy, x, y, &di, &di, &dui);
+}
+
+static void resizeclient(struct client *c, int x, int y, int w, int h)
+{
+    XWindowChanges wc;
+
+    c->oldx = c->x;
+    c->oldy = c->y;
+    c->oldw = c->w;
+    c->oldh = c->h;
+    
+    c->x = wc.x = x;
+    c->y = wc.y = y;
+    c->w = wc.width = w;
+    c->h = wc.height = h;
+    wc.border_width = BORDER_WIDTH;
+
+    XConfigureWindow(dpy, c->win, CWX|CWY|CWWidth|CWHeight|CWBorderWidth, &wc);
+}
+
+static void resize(struct client *c, int x, int y, int w, int h, int interact)
+{
+    resizeclient(c, x, y, w, h);
+}
+
+static void movemouse(const Arg *arg)
+{
+	int x, y, ocx, ocy, nx, ny;
+	struct client *c;
+	XEvent ev;
+	Time lasttime = 
+
+#if defined(__MACH__) && defined(__APPLE__)
+	0;
+#else
+	0;
+#endif
+    
+	c = workspaces[current_ws].focus; 
+	if (!c)
+		return;
+
+	ocx = c->x;
+	ocy = c->y;
+    
+	if (XGrabPointer(dpy, root, False, MOUSE_MASK, GrabModeAsync, GrabModeAsync,
+		None, cursor[CurMove], CurrentTime) != GrabSuccess)
+		return;
+	if (!getrootptr(&x, &y))
+		return;
+    
+	do {
+		XMaskEvent(dpy, MOUSE_MASK|ExposureMask|SubstructureRedirectMask, &ev);
+		
+		switch(ev.type) {
+		case EV_ConfigureRequest:
+			handle_configure_request(&ev);
+			break;
+		case EV_Expose:
+			handle_expose(&ev);
+			break;
+		case EV_MapRequest:
+			handle_map_request(&ev);
+			break;
+		case EV_MotionNotify:
+			if ((ev.xmotion.time - lasttime) <= (1000 / 60))
+				continue;
+			lasttime = ev.xmotion.time;
+
+			nx = ocx + (ev.xmotion.x_root - x);
+			ny = ocy + (ev.xmotion.y_root - y);
+
+			resize(c, nx, ny, c->w, c->h, 1);
+			break;
+		}
+	} while (ev.type != EV_ButtonRelease);
+    
+	XUngrabPointer(dpy, CurrentTime);
+}
+
+static void resizemouse(const Arg *arg)
+{
+	int ocx, ocy, nw, nh;
+	struct client *c;
+	XEvent ev;
+	Time lasttime = 
+
+#if defined(__MACH__) && defined(__APPLE__)
+	0;
+#else
+	0;
+#endif
+    
+	c = workspaces[current_ws].focus; 
+	if (!c)
+		return;
+
+	ocx = c->x;
+	ocy = c->y;
+    
+	if (XGrabPointer(dpy, root, False, MOUSE_MASK, GrabModeAsync, GrabModeAsync,
+		None, cursor[CurResize], CurrentTime) != GrabSuccess)
+		return;
+    
+	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, 
+                 c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
+
+	do {
+		XMaskEvent(dpy, MOUSE_MASK|ExposureMask|SubstructureRedirectMask, &ev);
+		
+		switch(ev.type) {
+		case EV_ConfigureRequest:
+			handle_configure_request(&ev);
+			break;
+		case EV_Expose:
+			handle_expose(&ev);
+			break;
+		case EV_MapRequest:
+			handle_map_request(&ev);
+			break;
+		case EV_MotionNotify:
+			if ((ev.xmotion.time - lasttime) <= (1000 / 60))
+				continue;
+			lasttime = ev.xmotion.time;
+
+			nw = MAX(ev.xmotion.x - ocx - 2 * BORDER_WIDTH + 1, 1);
+			nh = MAX(ev.xmotion.y - ocy - 2 * BORDER_WIDTH + 1, 1);
+
+			resize(c, c->x, c->y, nw, nh, 1);
+			break;
+		}
+	} while (ev.type != EV_ButtonRelease);
+
+	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
+	XUngrabPointer(dpy, CurrentTime);
+	
+	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
+}
+
 static void handle_button_press(XEvent *e)
 {
     XButtonEvent *be = &e->xbutton;
-    
+    struct client *c;
+
     if (be->subwindow == None || be->subwindow == bar_win)
         return;
 
-    // 关键修复：检查 MOD_MASK 是否存在于 CLEANMASK 后的状态中
     if (!(CLEANMASK(be->state) & MOD_MASK))
         return;
 
-    current_drag_client = client_find(be->subwindow);
-    if (!current_drag_client)
+    c = client_find(be->subwindow);
+    if (!c || c->ws_id != current_ws)
         return;
     
-    client_focus(current_drag_client);
-    XGetWindowAttributes(dpy, be->subwindow, &start_attr);
-    start_event = *be;
-
-    if (XGrabPointer(dpy, be->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess) {
-        current_drag_client = NULL;
-        return;
-    }
-}
-
-static void handle_motion_notify(XEvent *e)
-{
-    XMotionEvent *me = &e->xmotion;
+    client_focus(c);
     
-    if (current_drag_client == NULL)
-        return;
+    Arg arg = {0}; 
     
-    if (me->window != current_drag_client->win)
-        return;
-
-    int xdiff = me->x_root - start_event.x_root;
-    int ydiff = me->y_root - start_event.y_root;
-
-    if (start_event.button == 1) { 
-        current_drag_client->x = start_attr.x + xdiff;
-        current_drag_client->y = start_attr.y + ydiff;
-        XMoveWindow(dpy, current_drag_client->win, current_drag_client->x, current_drag_client->y);
-    } else if (start_event.button == 3) { 
-        current_drag_client->w = MAX(1, start_attr.width + xdiff);
-        current_drag_client->h = MAX(1, start_attr.height + ydiff);
-        XResizeWindow(dpy, current_drag_client->win, current_drag_client->w, current_drag_client->h);
-    }
-}
-
-static void handle_button_release(XEvent *e)
-{
-    if (current_drag_client == NULL)
-        return;
-
-    XUngrabPointer(dpy, CurrentTime);
-    current_drag_client = NULL;
-
-    XEvent ev;
-    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
+    if (be->button == 1) {
+        movemouse(&arg);
+    } 
+    else if (be->button == 3) {
+        resizemouse(&arg);
+    } 
 }
 
 static struct client *client_find(Window w)
