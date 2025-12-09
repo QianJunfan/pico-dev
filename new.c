@@ -203,23 +203,7 @@ void view_next_tab(const union arg *arg);
 void view_prev_tab(const union arg *arg);
 void focus_next_cli(const union arg *arg);
 void focus_prev_cli(const union arg *arg);
-
 void new_tab(const union arg *arg)
-{
-	struct mon *m = runtime.mon_sel;
-	struct tab *t;
-
-	if (!m)
-		return;
-
-	t = t_init(m);
-
-	if (t) {
-		log_action("New Tab created: 0x%lx, activating it.", t->id);
-		t_sel(t);
-	}
-}
-
 #define XK_SHIFT	ShiftMask
 #define XK_LOCK		LockMask
 #define XK_CONTROL	ControlMask
@@ -1014,6 +998,23 @@ struct tab *t_init(struct mon *m)
 	log_action("New tab 0x%lx initialized on monitor 0x%lx", t->id, m->id);
 
 	return t;
+}
+
+
+void new_tab(const union arg *arg)
+{
+	struct mon *m = runtime.mon_sel;
+	struct tab *t;
+
+	if (!m)
+		return;
+
+	t = t_init(m);
+
+	if (t) {
+		log_action("New Tab created: 0x%lx, activating it.", t->id);
+		t_sel(t);
+	}
 }
 
 void t_move(struct tab *t, int d_offset)
