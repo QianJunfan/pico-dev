@@ -125,6 +125,16 @@ typedef void (*XEventHandler)(XEvent *);
 
 static XEventHandler handler[LAST_EVENT_TYPE];
 
+void spawn(const union arg *arg);
+void killclient(const union arg *arg);
+void toggle_float(const union arg *arg);
+void quit_wm(const union arg *arg);
+void view_next_tab(const union arg *arg);
+void view_prev_tab(const union arg *arg);
+void focus_next_cli(const union arg *arg);
+void focus_prev_cli(const union arg *arg);
+void new_tab(const union arg *arg);
+
 #define XK_SHIFT	ShiftMask
 #define XK_LOCK		LockMask
 #define XK_CONTROL	ControlMask
@@ -260,16 +270,6 @@ void d_unsel(struct cli *c);
 void setup(void);
 void run(void);
 void quit(void);
-
-void spawn(const union arg *arg);
-void killclient(const union arg *arg);
-void toggle_float(const union arg *arg);
-void quit_wm(const union arg *arg);
-void view_next_tab(const union arg *arg);
-void view_prev_tab(const union arg *arg);
-void focus_next_cli(const union arg *arg);
-void focus_prev_cli(const union arg *arg);
-void new_tab(const union arg *arg);
 
 void spawn(const union arg *arg)
 {
