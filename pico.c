@@ -85,8 +85,8 @@ static void switch_workspace(int new_ws);
 static int getrootptr(int *x, int *y);
 static void resizeclient(struct client *c, int x, int y, int w, int h);
 static void resize(struct client *c, int x, int y, int w, int h, int interact);
-static void movemouse(const Arg *arg);
-static void resizemouse(const Arg *arg);
+static void movemouse(const Arg *arg, Time time);
+static void resizemouse(const Arg *arg, Time time);
 static void handle_map_request(XEvent *e);
 static void handle_unmap_notify(XEvent *e);
 static void handle_configure_request(XEvent *e);
@@ -198,18 +198,12 @@ static void resize(struct client *c, int x, int y, int w, int h, int interact)
     resizeclient(c, x, y, w, h);
 }
 
-static void movemouse(const Arg *arg)
+static void movemouse(const Arg *arg, Time time)
 {
 	int x, y, ocx, ocy, nx, ny;
 	struct client *c;
 	XEvent ev;
-	Time lasttime = 
-
-#if defined(__MACH__) && defined(__APPLE__)
-	0;
-#else
-	0;
-#endif
+	Time lasttime = 0;
     
 	c = workspaces[current_ws].focus; 
 	if (!c)
@@ -219,7 +213,7 @@ static void movemouse(const Arg *arg)
 	ocy = c->y;
     
 	if (XGrabPointer(dpy, root, False, MOUSE_MASK, GrabModeAsync, GrabModeAsync,
-		None, cursor[CurMove], CurrentTime) != GrabSuccess)
+		None, cursor[CurMove], time) != GrabSuccess)
 		return;
 	if (!getrootptr(&x, &y))
 		return;
@@ -253,18 +247,12 @@ static void movemouse(const Arg *arg)
 	XUngrabPointer(dpy, CurrentTime);
 }
 
-static void resizemouse(const Arg *arg)
+static void resizemouse(const Arg *arg, Time time)
 {
 	int ocx, ocy, nw, nh;
 	struct client *c;
 	XEvent ev;
-	Time lasttime = 
-
-#if defined(__MACH__) && defined(__APPLE__)
-	0;
-#else
-	0;
-#endif
+	Time lasttime = 0;
     
 	c = workspaces[current_ws].focus; 
 	if (!c)
@@ -274,7 +262,7 @@ static void resizemouse(const Arg *arg)
 	ocy = c->y;
     
 	if (XGrabPointer(dpy, root, False, MOUSE_MASK, GrabModeAsync, GrabModeAsync,
-		None, cursor[CurResize], CurrentTime) != GrabSuccess)
+		None, cursor[CurResize], time) != GrabSuccess)
 		return;
     
 	XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, 
@@ -332,10 +320,10 @@ static void handle_button_press(XEvent *e)
     Arg arg = {0}; 
     
     if (be->button == 1) {
-        movemouse(&arg);
+        movemouse(&arg, be->time);
     } 
     else if (be->button == 3) {
-        resizemouse(&arg);
+        resizemouse(&arg, be->time);
     } 
 }
 
