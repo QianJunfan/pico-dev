@@ -51,7 +51,9 @@ struct cli {
         unsigned int til_w, til_h;
 	int flt_x, flt_y;
         unsigned int flt_w, flt_h;
-
+        int drag_x, drag_y; 
+        unsigned int drag_w, drag_h;
+        int drag_root_x, drag_root_y;
 	bool is_sel		: 1;
 	bool is_foc		: 1;
 	bool is_hide		: 1;
@@ -122,11 +124,19 @@ static struct {
         Atom atom_delete_window;
     Display *dpy;
 } runtime;
-static int xerror(Display *dpy, XErrorEvent *ee);
-
 static int xerror(Display *dpy, XErrorEvent *ee)
 {
-    // 如果错误发生在 Root Window 上，并且是 BadAccess（权限不足），则很可能意味着抢占失败
+    const char *request_name = "Unknown";
+    
+    // 增加请求代码到 Xlib 函数名的映射，帮助定位问题
+    switch (ee->request_code) {
+        case 12: request_name = "XChangeWindowAttributes/XSelectInput"; break; // Error 2 (BadValue)
+        case 43: request_name = "XGrabKey"; break;                             // Error 8 (BadMatch)
+        case 10: request_name = "XUnmapWindow"; break;
+        case 7:  request_name = "XGrabButton"; break;
+        default: break; 
+    }
+
 	if (ee->error_code == BadAccess && ee->request_code == XChangeWindowAttributes
         && ee->resourceid == RootWindow(dpy, DefaultScreen(dpy)))
 	{
@@ -134,11 +144,11 @@ static int xerror(Display *dpy, XErrorEvent *ee)
 		exit(1);
 	}
     
-    // 打印其他未处理的错误
-	fprintf(stderr, "pico: fatal: unhandled X error %u (Request Code: %u, Serial: %lu)\n", 
-            ee->error_code, ee->request_code, ee->serial);
+    // 修复：使用更详细的打印格式
+	fprintf(stderr, "pico: fatal: unhandled X error %u (Code: %s/%u, Resource: %lu, Serial: %lu)\n", 
+            ee->error_code, request_name, ee->request_code, ee->resourceid, ee->serial);
             
-	return 0; // 必须返回 0
+	return 0;
 }
 /* function prototypes */
 void c_attach_t(struct cli *c, struct tab *t);
@@ -1306,7 +1316,6 @@ static void handle_enternotify(XEvent *e)
 	c_foc(c);
 	c_sel(c);
 }
-
 static void handle_buttonpress(XEvent *e)
 {
 	XButtonEvent *ev = &e->xbutton;
@@ -1326,6 +1335,15 @@ static void handle_buttonpress(XEvent *e)
 
 	runtime.cli_mouse = c;
 	c_raise(c);
+    
+    // 修复 1：保存拖拽/缩放的初始状态和根窗口坐标
+    c->drag_x = c->x;
+    c->drag_y = c->y;
+    c->drag_w = c->w;
+    c->drag_h = c->h;
+    c->drag_root_x = ev->x_root;
+    c->drag_root_y = ev->y_root;
+    // --- 修复 1 结束 ---
 
 	if (ev->button == Button1) {
 		runtime.mouse_mode = MOUSE_MODE_MOVE;
@@ -1335,8 +1353,8 @@ static void handle_buttonpress(XEvent *e)
 			     GrabModeAsync, GrabModeAsync,
 			     None, None, CurrentTime);
 
-		XWarpPointer(dpy, None, c->win, 0, 0, 0, 0,
-			     c->w / 2, c->h / 2);
+		// [移除] XWarpPointer 以简化移动逻辑
+        // XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w / 2, c->h / 2);
 
 	} else if (ev->button == Button3) {
 		runtime.mouse_mode = MOUSE_MODE_RESIZE;
@@ -1346,11 +1364,10 @@ static void handle_buttonpress(XEvent *e)
 			     GrabModeAsync, GrabModeAsync,
 			     None, None, CurrentTime);
 
-		XWarpPointer(dpy, None, c->win, 0, 0, 0, 0,
-			     c->w, c->h);
+        // [移除] XWarpPointer 以简化缩放逻辑
+        // XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w, c->h);
 	}
 }
-
 static void handle_motionnotify(XEvent *e)
 {
 	XMotionEvent *ev = &e->xmotion;
@@ -1362,18 +1379,20 @@ static void handle_motionnotify(XEvent *e)
 	if (runtime.mouse_mode == MOUSE_MODE_NONE || !c)
 		return;
 
-	dx = ev->x;
-	dy = ev->y;
+    // 修复 2：使用根窗口坐标的差值来计算位移 (dx, dy)
+	dx = ev->x_root - c->drag_root_x;
+	dy = ev->y_root - c->drag_root_y;
 
 	switch (runtime.mouse_mode) {
 	case MOUSE_MODE_MOVE:
-		c_move(c, c->x + dx - (c->w / 2),
-			  c->y + dy - (c->h / 2));
+        // 修复 2a：使用初始位置加上位移
+		c_move(c, c->drag_x + dx, c->drag_y + dy);
 		break;
 
 	case MOUSE_MODE_RESIZE:
-		new_w = c->w + dx;
-		new_h = c->h + dy;
+        // 修复 2b：使用初始尺寸加上位移
+		new_w = c->drag_w + dx;
+		new_h = c->drag_h + dy;
 
 		if (new_w < min_size)
 			new_w = min_size;
