@@ -582,4 +582,8 @@ static void updatenumlockmask(void)
 	numlockmask = 0;
 	modmap = XGetModifierMapping(dpy);
 	for (i = 0; i < 8; i++)
-		for (j = 0; j < modmap->max_keypermod
+		for (j = 0; j < modmap->max_keypermod; j++)
+			if (modmap->modifiermap[i * modmap->max_keypermod + j] == XKeysymToKeycode(dpy, XK_Num_Lock))
+				numlockmask = (1 << i);
+	XFreeModifiermap(modmap);
+}
