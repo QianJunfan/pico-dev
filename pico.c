@@ -1407,8 +1407,8 @@ void run(void)
 	while (1) {
 		XNextEvent(runtime.dpy, &ev); 
 
-		if (handler[ev.type])
-			handler[ev->type](&ev);
+                if (handler[ev.type])
+                        handler[ev.type](&ev);
 	}
 }
 
