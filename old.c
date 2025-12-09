@@ -7,7 +7,7 @@
 #include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include <X11/Xutil.h>
-#include <stdarg.h>
+#include <stdarg.h> // for log_action
 
 enum mouse_mode {
 	MOUSE_MODE_NONE,
@@ -47,14 +47,14 @@ struct cli {
 	struct mon *mon;
 	struct tab *tab;
 	int x, y;
-	unsigned int w, h;
-	int til_x, til_y;
-	unsigned int til_w, til_h;
+        unsigned int w, h;
+	int til_x, til_y; 
+        unsigned int til_w, til_h;
 	int flt_x, flt_y;
-	unsigned int flt_w, flt_h;
-	int drag_x, drag_y;
-	unsigned int drag_w, drag_h;
-	int drag_root_x, drag_root_y;
+        unsigned int flt_w, flt_h;
+        int drag_x, drag_y; 
+        unsigned int drag_w, drag_h;
+        int drag_root_x, drag_root_y;
 	bool is_sel		: 1;
 	bool is_foc		: 1;
 	bool is_hide		: 1;
@@ -65,14 +65,19 @@ struct cli {
 
 struct tab {
 	uint64_t id;
+
 	struct tab *next;
 	struct tab *prev;
+
 	struct mon *mon;
+
 	uint64_t cli_cnt;
 	struct cli *clis;
 	struct cli *cli_sel;
+
 	uint64_t cli_til_cnt;
-	struct cli **clis_til;
+	struct cli **clis_til; /* Array of tiled clients */
+
 	uint64_t cli_flt_cnt;
 	struct cli *clis_flt;
 	bool is_sel		: 1;
@@ -82,19 +87,24 @@ struct doc {
 	uint64_t cli_cnt;
 	struct cli *clis;
 	struct cli *cli_sel;
+
 	bool is_hide : 1;
 };
 
 struct mon {
 	uint64_t id;
 	struct _XDisplay *display;
+
 	struct mon *next;
 	struct mon *prev;
+
 	uint64_t tab_cnt;
 	struct tab *tabs;
 	struct tab *tab_sel;
+
 	Window root;
 	int x, y, w, h;
+
 	bool is_size_change : 1;
 };
 
@@ -108,16 +118,25 @@ static struct {
 	uint64_t mon_cnt;
 	struct mon *mons;
 	uint64_t arrange_type;
+
 	enum mouse_mode mouse_mode;
-	Atom atom_protocols;
-	Atom atom_delete_window;
-	Display *dpy;
+        Atom atom_protocols;
+        Atom atom_delete_window;
+    Display *dpy;
 } runtime;
 
+/* ************************************************************************* */
+/* ** LOGGING AND ERROR HANDLING ** */
+/* ************************************************************************* */
+
+/**
+ * @brief 打印操作日志到 stderr
+ * * @param format 格式字符串
+ * @param ... 变长参数
+ */
 static void log_action(const char *format, ...)
 {
 	va_list args;
-
 	fprintf(stderr, "pico: Log: ");
 	va_start(args, format);
 	vfprintf(stderr, format, args);
@@ -127,33 +146,31 @@ static void log_action(const char *format, ...)
 
 static int xerror(Display *dpy, XErrorEvent *ee)
 {
-	const char *request_name = "Unknown";
+    const char *request_name = "Unknown";
+    
+    // 增加请求代码到 Xlib 函数名的映射
+    switch (ee->request_code) {
+        case 12: request_name = "XChangeWindowAttributes/XSelectInput"; break; // Error 2 (BadValue)
+        case 43: request_name = "XGrabKey"; break;                             // Error 8 (BadMatch)
+        case 7:  request_name = "XGrabButton"; break;
+        case 44: request_name = "XUngrabKey/XUngrabButton"; break; // Request 44 is UngrabKey/UngrabButton
+        case 42: request_name = "XGrabKey"; break; // Request 42 is XGrabKey
+        default: break; 
+    }
 
-	switch (ee->request_code) {
-	case 12: request_name = "XChangeWindowAttributes/XSelectInput"; break;
-	case 43: request_name = "XGrabKey"; break;
-	case 7:  request_name = "XGrabButton"; break;
-	case 44: request_name = "XUngrabKey/XUngrabButton"; break;
-	case 42: request_name = "XGrabKey"; break;
-	default: break;
-	}
-
-	if (ee->error_code == BadAccess &&
-	    ee->request_code == XChangeWindowAttributes &&
-	    ee->resourceid == RootWindow(dpy, DefaultScreen(dpy))) {
+	if (ee->error_code == BadAccess && ee->request_code == XChangeWindowAttributes
+        && ee->resourceid == RootWindow(dpy, DefaultScreen(dpy)))
+	{
 		fprintf(stderr, "pico: fatal: another window manager is running\n");
 		exit(1);
 	}
-
-	fprintf(stderr,
-		"pico: fatal: unhandled X error %u (Code: %s/%u, "
-		"Resource: %lu, Serial: %lu)\n",
-		ee->error_code, request_name, ee->request_code,
-		ee->resourceid, ee->serial);
-
+    
+	fprintf(stderr, "pico: fatal: unhandled X error %u (Code: %s/%u, Resource: %lu, Serial: %lu)\n", 
+            ee->error_code, request_name, ee->request_code, ee->resourceid, ee->serial);
+            
 	return 0;
 }
-
+/* function prototypes */
 void c_attach_t(struct cli *c, struct tab *t);
 void c_attach_d(struct cli *c, struct doc *d);
 void c_detach_t(struct cli *c);
@@ -204,6 +221,10 @@ void view_prev_tab(const union arg *arg);
 void focus_next_cli(const union arg *arg);
 void focus_prev_cli(const union arg *arg);
 
+/* ************************************************************************* */
+/* ** KEY BINDINGS AND FUNCTION IMPLEMENTATIONS ** */
+/* ************************************************************************* */
+
 #define XK_SHIFT	ShiftMask
 #define XK_LOCK		LockMask
 #define XK_CONTROL	ControlMask
@@ -215,6 +236,7 @@ void focus_prev_cli(const union arg *arg);
 #define XK_ANY		AnyModifier
 #define MOUSE_MOD	XK_SUPER
 
+/* 用于忽略 NumLock 和 CapsLock 的掩码，用于修饰键状态比较 */
 #define IGNORED_MODS (LockMask | Mod2Mask)
 #define CLEANMASK(mask) ((mask) & ~IGNORED_MODS)
 
@@ -222,15 +244,18 @@ static const char *termcmd[] = { "xterm", NULL };
 static const char *browsercmd[] = { "firefox", NULL };
 
 static const struct key keys[] = {
+	/* modifier,   keysym,      function,   argument */
 	{ XK_SUPER,   XK_Return,    spawn,      {.ptr = termcmd } },
 	{ XK_SUPER,   XK_w,         spawn,      {.ptr = browsercmd } },
 	{ XK_SUPER,   XK_c,         killclient, {0} },
 	{ XK_SUPER,   XK_f,         toggle_float, {0} },
 	{ XK_SUPER,   XK_q,         quit_wm,    {0} },
 
+	/* Tab navigation */
 	{ XK_SUPER,   XK_Right,     view_next_tab,  {0} },
 	{ XK_SUPER,   XK_Left,      view_prev_tab,  {0} },
 
+	/* Client focus */
 	{ XK_SUPER,   XK_j,         focus_next_cli, {0} },
 	{ XK_SUPER,   XK_k,         focus_prev_cli, {0} },
 };
@@ -241,8 +266,7 @@ void spawn(const union arg *arg)
 	if (fork() == 0) {
 		setsid();
 		execvp(((char **)arg->ptr)[0], (char **)arg->ptr);
-		fprintf(stderr, "pico: execvp failed for %s\n",
-			((char **)arg->ptr)[0]);
+		fprintf(stderr, "pico: execvp failed for %s\n", ((char **)arg->ptr)[0]);
 		exit(1);
 	}
 }
@@ -251,7 +275,7 @@ void killclient(const union arg *arg)
 {
 	if (!runtime.cli_sel)
 		return;
-
+	
 	log_action("KillClient: window 0x%lx", runtime.cli_sel->win);
 	c_kill(runtime.cli_sel);
 }
@@ -261,8 +285,8 @@ void toggle_float(const union arg *arg)
 	if (!runtime.cli_sel)
 		return;
 
-	log_action("ToggleFloat: window 0x%lx, current float: %d",
-		runtime.cli_sel->win, runtime.cli_sel->is_float);
+	log_action("ToggleFloat: window 0x%lx, current float: %d", 
+        runtime.cli_sel->win, runtime.cli_sel->is_float);
 
 	if (runtime.cli_sel->is_float)
 		c_tile(runtime.cli_sel);
@@ -279,15 +303,12 @@ void quit_wm(const union arg *arg)
 void view_next_tab(const union arg *arg)
 {
 	struct tab *t = runtime.tab_sel;
-	struct tab *next;
-
 	if (!t || !t->mon)
 		return;
 
-	next = t->next ? t->next : t->mon->tabs;
+	struct tab *next = t->next ? t->next : t->mon->tabs;
 	if (next && next != t) {
-		log_action("ViewNextTab: Switching from tab 0x%lx to 0x%lx",
-			t->id, next->id);
+		log_action("ViewNextTab: Switching from tab 0x%lx to 0x%lx", t->id, next->id);
 		t_sel(next);
 	}
 }
@@ -295,15 +316,12 @@ void view_next_tab(const union arg *arg)
 void view_prev_tab(const union arg *arg)
 {
 	struct tab *t = runtime.tab_sel;
-	struct tab *prev;
-
 	if (!t || !t->mon)
 		return;
 
-	prev = t->prev ? t->prev : t->mon->tabs;
+	struct tab *prev = t->prev ? t->prev : t->mon->tabs;
 	if (prev && prev != t) {
-		log_action("ViewPrevTab: Switching from tab 0x%lx to 0x%lx",
-			t->id, prev->id);
+		log_action("ViewPrevTab: Switching from tab 0x%lx to 0x%lx", t->id, prev->id);
 		t_sel(prev);
 	}
 }
@@ -311,12 +329,10 @@ void view_prev_tab(const union arg *arg)
 void focus_next_cli(const union arg *arg)
 {
 	struct cli *c = runtime.cli_sel;
-	struct cli *next;
-
 	if (!c || !c->tab)
 		return;
 
-	next = c->next ? c->next : c->tab->clis;
+	struct cli *next = c->next ? c->next : c->tab->clis;
 
 	if (next && next != c) {
 		log_action("FocusNextCli: Focusing client 0x%lx", next->win);
@@ -327,10 +343,10 @@ void focus_next_cli(const union arg *arg)
 void focus_prev_cli(const union arg *arg)
 {
 	struct cli *c = runtime.cli_sel;
-	struct cli *prev;
-
 	if (!c || !c->tab)
 		return;
+
+	struct cli *prev;
 
 	if (c->prev) {
 		prev = c->prev;
@@ -346,28 +362,31 @@ void focus_prev_cli(const union arg *arg)
 	}
 }
 
+/* ************************************************************************* */
+/* ** CORE EVENT HANDLERS AND SETUP/RUN/QUIT ** */
+/* ************************************************************************* */
+
 typedef void (*XEventHandler)(XEvent *);
 
 #define LAST_EVENT_TYPE 35
 
 static XEventHandler handler[LAST_EVENT_TYPE];
 
+/* Helper function for tiled client array management */
 static void c_til_append(struct cli *c, struct tab *t)
 {
 	c->tab = t;
 	t->cli_til_cnt++;
-	t->clis_til = realloc(t->clis_til,
-			      t->cli_til_cnt * sizeof(struct cli *));
+	t->clis_til = realloc(t->clis_til, t->cli_til_cnt * sizeof(struct cli *));
 	t->clis_til[t->cli_til_cnt - 1] = c;
-	log_action("Client 0x%lx attached as tiled to tab 0x%lx",
-		c->win, t->id);
+	log_action("Client 0x%lx attached as tiled to tab 0x%lx", c->win, t->id);
 }
 
 static void c_til_remove(struct cli *c)
 {
 	struct tab *t = c->tab;
 	uint64_t i;
-
+	
 	if (!t || !t->clis_til)
 		return;
 
@@ -377,14 +396,12 @@ static void c_til_remove(struct cli *c)
 			if (t->cli_til_cnt > 0) {
 				for (; i < t->cli_til_cnt; i++)
 					t->clis_til[i] = t->clis_til[i + 1];
-				t->clis_til = realloc(t->clis_til,
-					t->cli_til_cnt * sizeof(struct cli *));
+				t->clis_til = realloc(t->clis_til, t->cli_til_cnt * sizeof(struct cli *));
 			} else {
 				free(t->clis_til);
 				t->clis_til = NULL;
 			}
-			log_action("Client 0x%lx removed from tiled list of "
-				"tab 0x%lx", c->win, t->id);
+			log_action("Client 0x%lx removed from tiled list of tab 0x%lx", c->win, t->id);
 			return;
 		}
 	}
@@ -425,8 +442,7 @@ static void c_attach_flt(struct cli *c, struct tab *t)
 
 	t->clis_flt = c;
 	t->cli_flt_cnt++;
-	log_action("Client 0x%lx attached as floating to tab 0x%lx",
-		c->win, t->id);
+	log_action("Client 0x%lx attached as floating to tab 0x%lx", c->win, t->id);
 }
 
 static void c_detach_flt(struct cli *c)
@@ -444,8 +460,7 @@ static void c_detach_flt(struct cli *c)
 	t->cli_flt_cnt--;
 	c->next = NULL;
 	c->prev = NULL;
-	log_action("Client 0x%lx detached from floating list of tab 0x%lx",
-		c->win, t->id);
+	log_action("Client 0x%lx detached from floating list of tab 0x%lx", c->win, t->id);
 }
 
 void c_attach_t(struct cli *c, struct tab *t)
@@ -461,8 +476,7 @@ void c_attach_t(struct cli *c, struct tab *t)
 
 	t->clis = c;
 	t->cli_cnt++;
-	log_action("Client 0x%lx attached to tab 0x%lx (general list)",
-		c->win, t->id);
+	log_action("Client 0x%lx attached to tab 0x%lx (general list)", c->win, t->id);
 }
 
 void c_attach_d(struct cli *c, struct doc *d)
@@ -708,6 +722,7 @@ void c_unsel(struct cli *c)
 
 	log_action("Client unselect: 0x%lx", c->win);
 	c->is_sel = false;
+	/* TBD: draw unfocused border */
 }
 
 void c_foc(struct cli *c)
@@ -722,6 +737,8 @@ void c_foc(struct cli *c)
 
 	runtime.cli_foc = c;
 	c->is_foc = true;
+
+	/* TBD: draw focus border */
 }
 
 void c_unfoc(struct cli *c)
@@ -731,6 +748,8 @@ void c_unfoc(struct cli *c)
 
 	log_action("Client unfocus: 0x%lx", c->win);
 	c->is_foc = false;
+
+	/* TBD: draw normal border */
 }
 
 void t_sel(struct tab *t)
@@ -749,12 +768,13 @@ void t_sel(struct tab *t)
 	if (t->mon)
 		m_sel(t->mon);
 
+	/* TBD: Select the first client if none is selected */
 	if (!t->cli_sel && t->clis) {
 		c_sel(t->clis);
 	} else if (t->cli_sel) {
 		c_sel(t->cli_sel);
 	}
-
+	
 	m_update(t->mon);
 }
 
@@ -786,6 +806,7 @@ void d_sel(struct cli *c)
 
 void d_unsel(struct cli *c)
 {
+	/* TBD: logic */
 }
 
 void c_hide(struct cli *c)
@@ -893,60 +914,62 @@ void c_moveto_m(struct cli *c, struct mon *m)
 	log_action("Client 0x%lx move to monitor 0x%lx", c->win, m->id);
 	c_moveto_t(c, m->tab_sel);
 }
-
 void c_kill(struct cli *c)
 {
-	struct mon *m_old = c->mon;
-	int n;
-	Atom *protocols;
-	bool supports_delete = false;
-	Display *dpy;
+        struct mon *m_old = c->mon;
+        int n;
+        Atom *protocols;
+        bool supports_delete = false;
+        
+        if (!c || !c->win || !c->mon)
+                return;
+        
+        // 修复：在 detach 之前保存 display 指针
+        Display *dpy = c->mon->display; 
+        log_action("Attempting to kill client 0x%lx", c->win);
 
-	if (!c || !c->win || !c->mon)
-		return;
+        if (XGetWMProtocols(c->mon->display, c->win, &protocols, &n))
+        {
+                for (int i = 0; i < n; i++)
+                {
+                        if (protocols[i] == runtime.atom_delete_window)
+                        {
+                                supports_delete = true;
+                                break;
+                        }
+                }
+                XFree(protocols);
+        }
 
-	dpy = c->mon->display;
-	log_action("Attempting to kill client 0x%lx", c->win);
+        if (supports_delete)
+        {
+                log_action("Client 0x%lx supports WM_DELETE_WINDOW, sending message", c->win);
+                XEvent ev;
+                ev.type = ClientMessage;
+                ev.xclient.window = c->win;
+                ev.xclient.message_type = runtime.atom_protocols;
+                ev.xclient.format = 32;
+                ev.xclient.data.l[0] = runtime.atom_delete_window;
+                ev.xclient.data.l[1] = CurrentTime;
 
-	if (XGetWMProtocols(c->mon->display, c->win, &protocols, &n)) {
-		for (int i = 0; i < n; i++) {
-			if (protocols[i] == runtime.atom_delete_window) {
-				supports_delete = true;
-				break;
-			}
-		}
-		XFree(protocols);
-	}
+                XSendEvent(c->mon->display, c->win, False, NoEventMask, &ev);
 
-	if (supports_delete) {
-		log_action("Client 0x%lx supports WM_DELETE_WINDOW, "
-			"sending message", c->win);
-		XEvent ev;
+                return;
+        }
 
-		ev.type = ClientMessage;
-		ev.xclient.window = c->win;
-		ev.xclient.message_type = runtime.atom_protocols;
-		ev.xclient.format = 32;
-		ev.xclient.data.l[0] = runtime.atom_delete_window;
-		ev.xclient.data.l[1] = CurrentTime;
+        log_action("Client 0x%lx does not support WM_DELETE_WINDOW, destroying window", c->win);
+        c_detach_t(c);
 
-		XSendEvent(c->mon->display, c->win, False, NoEventMask, &ev);
-		return;
-	}
+        // 修复：使用保存的 dpy 指针
+        if (c->win)
+                XDestroyWindow(dpy, c->win); 
 
-	log_action("Client 0x%lx does not support WM_DELETE_WINDOW, "
-		"destroying window", c->win);
-	c_detach_t(c);
+        free(c);
 
-	if (c->win)
-		XDestroyWindow(dpy, c->win);
+        m_update(m_old);
 
-	free(c);
-
-	m_update(m_old);
-
-	if (runtime.mon_sel)
-		m_sel(runtime.mon_sel);
+        if (runtime.mon_sel)
+                m_sel(runtime.mon_sel);
 }
 
 void c_init(struct tab *t, uint64_t arrange)
@@ -993,10 +1016,10 @@ struct tab *t_init(struct mon *m)
 	t->cli_til_cnt = 0;
 	t->is_sel = false;
 	t->clis_til = NULL;
-
+	
 	t_attach_m(t, m);
 	log_action("New tab 0x%lx initialized on monitor 0x%lx", t->id, m->id);
-
+	
 	return t;
 }
 
@@ -1073,12 +1096,10 @@ void t_remove(struct tab *t)
 	while (c) {
 		next_c = c->next;
 		if (t_fallback) {
-			log_action("  Moving client 0x%lx to fallback tab 0x%lx",
-				c->win, t_fallback->id);
+			log_action("  Moving client 0x%lx to fallback tab 0x%lx", c->win, t_fallback->id);
 			c_moveto_t(c, t_fallback);
 		} else {
-			log_action("  Killing client 0x%lx (no fallback tab)",
-				c->win);
+			log_action("  Killing client 0x%lx (no fallback tab)", c->win);
 			c_kill(c);
 		}
 		c = next_c;
@@ -1101,8 +1122,7 @@ void m_init(Display *dpy, Window root, int x, int y, int w, int h)
 	struct tab *t;
 
 	if (!(m = calloc(1, sizeof(*m)))) {
-		fprintf(stderr,
-			"Error: Failed to allocate memory for new monitor.\n");
+		fprintf(stderr, "Error: Failed to allocate memory for new monitor.\n");
 		return;
 	}
 
@@ -1117,13 +1137,12 @@ void m_init(Display *dpy, Window root, int x, int y, int w, int h)
 	m->is_size_change = false;
 
 	m_attach(m);
-	log_action("Monitor 0x%lx initialized: %dx%d @ %d,%d",
-		m->id, w, h, x, y);
-
+	log_action("Monitor 0x%lx initialized: %dx%d @ %d,%d", m->id, w, h, x, y);
+	
 	if (!(t = t_init(m))) {
-		m_detach(m);
+		m_detach(m); 
 		free(m);
-		return;
+		return; 
 	}
 
 	m->tab_sel = t;
@@ -1152,8 +1171,7 @@ void m_destroy(struct mon *m)
 	while (t) {
 		next_t = t->next;
 		if (m_fallback) {
-			log_action("  Moving tab 0x%lx to fallback monitor 0x%lx",
-				t->id, m_fallback->id);
+			log_action("  Moving tab 0x%lx to fallback monitor 0x%lx", t->id, m_fallback->id);
 			t_moveto_m(t, m_fallback);
 		}
 		t = next_t;
@@ -1166,6 +1184,7 @@ void m_destroy(struct mon *m)
 		m_sel(m_fallback);
 }
 
+/* Master-Stack Tiling Layout Implementation */
 void m_update(struct mon *m)
 {
 	struct tab *t;
@@ -1186,6 +1205,7 @@ void m_update(struct mon *m)
 	log_action("Monitor 0x%lx update (layout)", m->id);
 	n_til = t->cli_til_cnt;
 
+	/* Raise and show all floating clients */
 	for (c = t->clis_flt; c; c = c->next) {
 		if (c->is_hide)
 			c_show(c);
@@ -1194,7 +1214,8 @@ void m_update(struct mon *m)
 
 	if (n_til == 0)
 		goto end;
-
+	
+	/* Master client is the first tiled client in the array */
 	master = t->clis_til[0];
 
 	x = m->x + gap;
@@ -1202,18 +1223,22 @@ void m_update(struct mon *m)
 	w = m->w - 2 * gap;
 	h = m->h - 2 * gap;
 
+	/* If only one tiled client, make it fullscreen */
 	if (n_til == 1) {
 		c_move(master, x, y);
 		c_resize(master, w, h);
 		goto show_tiled;
 	}
 
+	/* Split into Master and Stack areas */
 	master_w = w * 55 / 100;
 	stack_w = w - master_w - gap;
 
+	/* Master window */
 	c_move(master, x, y);
 	c_resize(master, master_w - gap, h);
 
+	/* Stack windows */
 	x += master_w + gap;
 	stack_h = h / (n_til - 1);
 
@@ -1224,6 +1249,7 @@ void m_update(struct mon *m)
 	}
 
 show_tiled:
+	/* Show all tiled clients and raise the selected one */
 	for (i = 0; i < n_til; i++) {
 		c = t->clis_til[i];
 		if (c->is_hide)
@@ -1233,6 +1259,7 @@ show_tiled:
 		c_raise(t->cli_sel);
 
 end:
+	/* Ensure a client is selected if available */
 	if (!t->cli_sel && t->clis)
 		c_sel(t->clis);
 }
@@ -1246,14 +1273,14 @@ static KeyCode key_get(KeySym keysym)
 
 	return XKeysymToKeycode(m->display, keysym);
 }
-
 static void key_grab(void)
 {
 	struct mon *m = runtime.mons;
 	unsigned int i;
 	KeyCode code;
-	const unsigned int numlock_masks[] = { 0, XK_NUM };
-	unsigned int j;
+    // NumLock 状态所需的 Mod 掩码： 0 (无锁) 和 XK_NUM (Mod2Mask)
+    const unsigned int numlock_masks[] = { 0, XK_NUM }; 
+    unsigned int j;
 
 	if (!m)
 		return;
@@ -1262,42 +1289,50 @@ static void key_grab(void)
 
 	for (i = 0; i < sizeof(keys) / sizeof(*keys); i++) {
 		code = key_get(keys[i].keysym);
-
+		
 		if (code == 0) {
-			fprintf(stderr, "pico: Warning: KeySym %lu not mapped "
-				"to a KeyCode. Skipping grab.\n",
-				keys[i].keysym);
-			continue;
-		}
-
-		for (j = 0; j < sizeof(numlock_masks) / sizeof(*numlock_masks); j++) {
-			XGrabKey(m->display, code, keys[i].mod | numlock_masks[j],
-				m->root, True, GrabModeAsync, GrabModeAsync);
-		}
+            // 打印警告，如果是无效 KeySym，跳过抓取，避免 BadMatch
+            fprintf(stderr, "pico: Warning: KeySym %lu not mapped to a KeyCode. Skipping grab.\n", keys[i].keysym);
+            continue;
+        }
+        
+        // 修复：遍历所有 NumLock 组合，确保抓取成功
+        for (j = 0; j < sizeof(numlock_masks) / sizeof(*numlock_masks); j++) {
+            XGrabKey(m->display, code, keys[i].mod | numlock_masks[j], m->root,
+                True, GrabModeAsync, GrabModeAsync);
+        }
 	}
 	log_action("Key grabs completed");
 }
 
+/* ************************************************************************* */
+/* ** MOUSE GRAB ** */
+/* ************************************************************************* */
+
 static void mouse_grab(void)
 {
 	struct mon *m = runtime.mons;
-	const unsigned int numlock_masks[] = { 0, XK_NUM };
-	unsigned int j;
-
+    const unsigned int numlock_masks[] = { 0, XK_NUM }; 
+    unsigned int j;
+    
 	if (!m)
 		return;
 
-	XUngrabButton(m->display, AnyButton, AnyModifier, m->root);
+    // 🚀 修复：增加 Display 参数 m->display
+    XUngrabButton(m->display, AnyButton, AnyModifier, m->root);
+    
+    // 遍历所有 NumLock 组合 (0 和 Mod2Mask)
+    for (j = 0; j < sizeof(numlock_masks) / sizeof(*numlock_masks); j++) {
+        // 抓取 Super + Button1 (移动)
+        XGrabButton(m->display, Button1, MOUSE_MOD | numlock_masks[j], m->root,
+                    True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
 
-	for (j = 0; j < sizeof(numlock_masks) / sizeof(*numlock_masks); j++) {
-		XGrabButton(m->display, Button1, MOUSE_MOD | numlock_masks[j],
-			m->root, True, ButtonPressMask | ButtonReleaseMask |
-			PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
-
-		XGrabButton(m->display, Button3, MOUSE_MOD | numlock_masks[j],
-			m->root, True, ButtonPressMask | ButtonReleaseMask |
-			PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
-	}
+        // 抓取 Super + Button3 (缩放)
+        XGrabButton(m->display, Button3, MOUSE_MOD | numlock_masks[j], m->root,
+                    True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
+    }
 	log_action("Mouse grabs (Button1/3 + MOUSE_MOD) completed on root window");
 }
 
@@ -1307,19 +1342,18 @@ static void key_handle(XEvent *e)
 	XKeyEvent *ev = &e->xkey;
 	unsigned int i;
 	KeySym keysym = XKeycodeToKeysym(ev->display, (KeyCode)ev->keycode, 0);
+	
+	// 修复: 清理修饰键状态，忽略 LockMask 和 Mod2Mask (NumLock)
 	uint32_t clean_state = CLEANMASK(ev->state);
 
 	for (i = 0; i < sizeof(keys) / sizeof(*keys); i++) {
 		if (keysym == keys[i].keysym && clean_state == keys[i].mod) {
-			log_action("KeyPress: Mod 0x%x, KeySym %s, "
-				"Function executed", clean_state,
-				XKeysymToString(keysym));
+			log_action("KeyPress: Mod 0x%x, KeySym %s, Function executed", clean_state, XKeysymToString(keysym));
 			keys[i].func(&keys[i].arg);
 			return;
 		}
 	}
-	log_action("KeyPress: Mod 0x%x, KeySym %s, No matching binding found",
-		clean_state, XKeysymToString(keysym));
+	log_action("KeyPress: Mod 0x%x, KeySym %s, No matching binding found", clean_state, XKeysymToString(keysym));
 }
 
 static void handle_maprequest(XEvent *e)
@@ -1358,32 +1392,35 @@ static void handle_maprequest(XEvent *e)
 	c->flt_w = c->w;
 	c->flt_h = c->h;
 
-	c->drag_x = c->x;
-	c->drag_y = c->y;
-	c->drag_w = c->w;
-	c->drag_h = c->h;
-	c->drag_root_x = 0;
-	c->drag_root_y = 0;
+    // 初始化拖拽数据
+    c->drag_x = c->x;
+    c->drag_y = c->y;
+    c->drag_w = c->w;
+    c->drag_h = c->h;
+    c->drag_root_x = 0;
+    c->drag_root_y = 0;
 
 	c->is_float = (runtime.arrange_type == 1);
 
-	if (XGetTransientForHint(t->mon->display, c->win, &trans) &&
-	    trans != None) {
+	if (XGetTransientForHint(t->mon->display, c->win, &trans) && trans != None) {
 		c->is_float = true;
 	}
 
 	if ((wmh = XGetWMHints(t->mon->display, c->win)))
 		XFree(wmh);
 
-	c_attach_t(c, t);
+	// 确保 c_attach_t 在 XSelectInput 之前调用，以设置 c->mon
+	c_attach_t(c, t); 
 
+	// 核心修复：添加 ButtonPressMask，允许 WM 接收鼠标点击事件
 	XSelectInput(c->mon->display, c->win,
 		EnterWindowMask | FocusChangeMask | ButtonPressMask);
 
 	if (c->is_float) {
 		log_action("  Client is floating.");
 		c_float(c);
-	} else {
+	}
+	else {
 		log_action("  Client is tiled.");
 		c_tile(c);
 	}
@@ -1392,10 +1429,9 @@ static void handle_maprequest(XEvent *e)
 	c_sel(c);
 	m_update(t->mon);
 
-	if (c->mon)
-		XSync(c->mon->display, False);
+    if (c->mon)
+	    XSync(c->mon->display, False); 
 }
-
 static void handle_destroynotify(XEvent *e)
 {
 	XDestroyWindowEvent *ev = &e->xdestroywindow;
@@ -1438,30 +1474,28 @@ static void handle_enternotify(XEvent *e)
 	c_foc(c);
 	c_sel(c);
 }
-
 static void handle_buttonpress(XEvent *e)
 {
 	XButtonEvent *ev = &e->xbutton;
 	struct cli *c;
 	Display *dpy = ev->display;
-	Window root;
-	uint32_t clean_state;
-
-	log_action("ButtonPress: Button %u on window 0x%lx, state 0x%x",
-		ev->button, ev->window, ev->state);
+    Window root; // 新增：用于存储根窗口
+	
+	log_action("ButtonPress: Button %u on window 0x%lx, state 0x%x", ev->button, ev->window, ev->state);
 
 	if (!(c = c_fetch(ev->window))) {
-		if (ev->window != RootWindowOfScreen(DefaultScreenOfDisplay(dpy)))
-			return;
+        if (ev->window != RootWindowOfScreen(DefaultScreenOfDisplay(dpy))) {
+            return;
+        }
+        c = runtime.cli_sel; // 尝试对当前选中的窗口执行操作
+        if (!c) return;
 
-		c = runtime.cli_sel;
-		if (!c)
-			return;
 	}
 
 	c_sel(c);
 
-	clean_state = CLEANMASK(ev->state);
+	// 核心修复: 清理修饰键状态，忽略 LockMask 和 Mod2Mask (NumLock)
+	uint32_t clean_state = CLEANMASK(ev->state);
 
 	if (!c->is_float || clean_state != MOUSE_MOD)
 		return;
@@ -1471,23 +1505,24 @@ static void handle_buttonpress(XEvent *e)
 
 	runtime.cli_mouse = c;
 	c_raise(c);
+    
+    // 确保 monitor 存在，并获取根窗口
+    if (!c->mon) return; 
+    root = c->mon->root; 
 
-	if (!c->mon)
-		return;
-	root = c->mon->root;
-
-	c->drag_x = c->x;
-	c->drag_y = c->y;
-	c->drag_w = c->w;
-	c->drag_h = c->h;
-	c->drag_root_x = ev->x_root;
-	c->drag_root_y = ev->y_root;
+    // 修复：保存拖拽/缩放的初始状态和根窗口坐标
+    c->drag_x = c->x;
+    c->drag_y = c->y;
+    c->drag_w = c->w;
+    c->drag_h = c->h;
+    c->drag_root_x = ev->x_root;
+    c->drag_root_y = ev->y_root;
 
 	if (ev->button == Button1) {
 		runtime.mouse_mode = MOUSE_MODE_MOVE;
 		log_action("  Starting MOVE mode for client 0x%lx", c->win);
 
-		XGrabPointer(dpy, root, False,
+		XGrabPointer(dpy, root, False, 
 			     ButtonMotionMask | ButtonReleaseMask,
 			     GrabModeAsync, GrabModeAsync,
 			     None, None, CurrentTime);
@@ -1496,13 +1531,12 @@ static void handle_buttonpress(XEvent *e)
 		runtime.mouse_mode = MOUSE_MODE_RESIZE;
 		log_action("  Starting RESIZE mode for client 0x%lx", c->win);
 
-		XGrabPointer(dpy, root, False,
+		XGrabPointer(dpy, root, False, 
 			     ButtonMotionMask | ButtonReleaseMask,
 			     GrabModeAsync, GrabModeAsync,
 			     None, None, CurrentTime);
 	}
 }
-
 static void handle_motionnotify(XEvent *e)
 {
 	XMotionEvent *ev = &e->xmotion;
@@ -1514,15 +1548,18 @@ static void handle_motionnotify(XEvent *e)
 	if (runtime.mouse_mode == MOUSE_MODE_NONE || !c)
 		return;
 
+    // 修复 2：使用根窗口坐标的差值来计算位移 (dx, dy)
 	dx = ev->x_root - c->drag_root_x;
 	dy = ev->y_root - c->drag_root_y;
 
 	switch (runtime.mouse_mode) {
 	case MOUSE_MODE_MOVE:
+        // 修复 2a：使用初始位置加上位移
 		c_move(c, c->drag_x + dx, c->drag_y + dy);
 		break;
 
 	case MOUSE_MODE_RESIZE:
+        // 修复 2b：使用初始尺寸加上位移
 		new_w = c->drag_w + dx;
 		new_h = c->drag_h + dy;
 
@@ -1548,7 +1585,7 @@ static void handle_buttonrelease(XEvent *e)
 
 	if (runtime.mouse_mode == MOUSE_MODE_NONE)
 		return;
-
+	
 	log_action("ButtonRelease: Ending mouse mode %d", runtime.mouse_mode);
 
 	XUngrabPointer(dpy, CurrentTime);
@@ -1562,13 +1599,13 @@ static void handle_buttonrelease(XEvent *e)
 	if (runtime.cli_sel)
 		c_sel(runtime.cli_sel);
 }
-
 static void handle_configurerequest(XEvent *e)
 {
 	XConfigureRequestEvent *ev = &e->xconfigurerequest;
 	XWindowChanges wc;
 	struct cli *c;
-
+    
+    // 如果找不到客户端，先配置窗口并返回
 	if (!(c = c_fetch(ev->window))) {
 		wc.x = ev->x;
 		wc.y = ev->y;
@@ -1578,47 +1615,52 @@ static void handle_configurerequest(XEvent *e)
 		wc.sibling = ev->above;
 		wc.stack_mode = ev->detail;
 		XConfigureWindow(ev->display, ev->window, ev->value_mask, &wc);
-		log_action("ConfigureRequest: Window 0x%lx (unmanaged) "
-			"configured", ev->window);
+		log_action("ConfigureRequest: Window 0x%lx (unmanaged) configured", ev->window);
 		return;
 	}
 
-	log_action("ConfigureRequest: Window 0x%lx (managed, float: %d)",
-		c->win, c->is_float);
+	log_action("ConfigureRequest: Window 0x%lx (managed, float: %d)", c->win, c->is_float);
 
-	wc.x = c->x;
-	wc.y = c->y;
-	wc.width = c->w;
-	wc.height = c->h;
-	wc.border_width = 0;
-	wc.sibling = ev->above;
-	wc.stack_mode = ev->detail;
+    // 复制客户端的当前几何图形
+    wc.x = c->x;
+    wc.y = c->y;
+    wc.width = c->w;
+    wc.height = c->h;
+    wc.border_width = 0;
+    wc.sibling = ev->above;
+    wc.stack_mode = ev->detail;
 
+    // 如果是浮动窗口，允许客户端改变它的浮动几何图形
 	if (c->is_float) {
+        
+        // 更新浮动尺寸/位置
 		if (ev->value_mask & CWX) c->flt_x = ev->x;
 		if (ev->value_mask & CWY) c->flt_y = ev->y;
 		if (ev->value_mask & CWWidth) c->flt_w = ev->width;
 		if (ev->value_mask & CWHeight) c->flt_h = ev->height;
 
-		wc.x = c->flt_x;
-		wc.y = c->flt_y;
-		wc.width = c->flt_w;
-		wc.height = c->flt_h;
-
+        // 使用客户端请求的值来配置窗口
+        wc.x = c->flt_x;
+        wc.y = c->flt_y;
+        wc.width = c->flt_w;
+        wc.height = c->flt_h;
+        
 		XConfigureWindow(ev->display, ev->window, ev->value_mask, &wc);
-		log_action("  Configuring as floating: %d,%d %dx%d",
-			wc.x, wc.y, wc.width, wc.height);
+		log_action("  Configuring as floating: %d,%d %dx%d", wc.x, wc.y, wc.width, wc.height);
 
 	} else {
-		wc.x = c->x;
-		wc.y = c->y;
-		wc.width = c->w;
-		wc.height = c->h;
-
-		XConfigureWindow(ev->display, ev->window,
-			CWX | CWY | CWWidth | CWHeight | CWBorderWidth, &wc);
-		log_action("  Configuring as tiled: %d,%d %dx%d (ignoring "
-			"client request)", wc.x, wc.y, wc.width, wc.height);
+        // 如果是平铺窗口，忽略客户端请求的几何图形，使用 WM 决定的几何图形来配置窗口
+        
+        // 确保使用 WM 决定的几何图形
+        wc.x = c->x;
+        wc.y = c->y;
+        wc.width = c->w;
+        wc.height = c->h;
+        
+        // 修复：发送 ConfigureNotify 告知客户端其真实的几何图形
+		XConfigureWindow(ev->display, ev->window, 
+            CWX | CWY | CWWidth | CWHeight | CWBorderWidth, &wc);
+		log_action("  Configuring as tiled: %d,%d %dx%d (ignoring client request)", wc.x, wc.y, wc.width, wc.height);
 	}
 }
 
@@ -1628,8 +1670,7 @@ static void handle_unmapnotify(XEvent *e)
 	struct cli *c;
 	struct mon *m_old;
 
-	log_action("UnmapNotify for window 0x%lx (SendEvent: %d)",
-		ev->window, ev->send_event);
+	log_action("UnmapNotify for window 0x%lx (SendEvent: %d)", ev->window, ev->send_event);
 
 	if (!(c = c_fetch(ev->window)))
 		return;
@@ -1667,7 +1708,7 @@ static void handle_mapnotify(XEvent *e)
 	XMapEvent *ev = &e->xmap;
 	struct cli *c;
 	struct tab *t;
-
+	
 	log_action("MapNotify for window 0x%lx", ev->window);
 
 	if (!(c = c_fetch(ev->window)))
@@ -1715,7 +1756,6 @@ void handle_init(void)
 	handler[ConfigureRequest] = handle_configurerequest;
 	log_action("Event handlers initialized");
 }
-
 void setup(void)
 {
 	Screen *s;
@@ -1727,7 +1767,8 @@ void setup(void)
 		exit(1);
 	}
 
-	XSetErrorHandler(xerror);
+    // 修复：安装 X 错误处理程序
+    XSetErrorHandler(xerror);
 
 	handle_init();
 
@@ -1741,23 +1782,23 @@ void setup(void)
 		int w = s->width;
 		int h = s->height;
 
-		XSelectInput(runtime.dpy, root,
-			SubstructureRedirectMask | SubstructureNotifyMask |
+		XSelectInput(runtime.dpy, root, 
+			SubstructureRedirectMask | SubstructureNotifyMask | 
 			KeyPressMask | ButtonPressMask | EnterWindowMask);
-
-		XSync(runtime.dpy, False);
-
+		
+        // 修复：抢占后立即同步，如果失败（BadAccess），xerror 会捕获并退出
+        XSync(runtime.dpy, False); 
+        
 		m_init(runtime.dpy, root, x, y, w, h);
 	}
-
-	runtime.atom_protocols = XInternAtom(runtime.dpy, "WM_PROTOCOLS", False);
-	runtime.atom_delete_window = XInternAtom(runtime.dpy,
-						 "WM_DELETE_WINDOW", False);
+    
+    runtime.atom_protocols = XInternAtom(runtime.dpy, "WM_PROTOCOLS", False);
+    runtime.atom_delete_window = XInternAtom(runtime.dpy, "WM_DELETE_WINDOW", False);
 	log_action("WM_PROTOCOLS atoms fetched");
-
+	
 	key_grab();
-	mouse_grab();
-
+    mouse_grab(); // 调用 mouse_grab 抢占鼠标事件
+	
 	XSync(runtime.dpy, False);
 	log_action("Setup complete. Entering main loop.");
 }
@@ -1767,22 +1808,23 @@ void run(void)
 	XEvent ev;
 
 	while (1) {
-		XNextEvent(runtime.dpy, &ev);
-
-		if (handler[ev.type])
-			handler[ev.type](&ev);
+		XNextEvent(runtime.dpy, &ev); 
+		
+        if (handler[ev.type])
+            handler[ev.type](&ev);
 	}
 }
 
 void quit(void)
 {
 	struct mon *m;
-
+	
 	log_action("Quitting WM");
 	for (m = runtime.mons; m; m = m->next) {
 		XUngrabKey(m->display, AnyKey, AnyModifier, m->root);
-		XUngrabButton(m->display, AnyButton, AnyModifier, m->root);
-		XSelectInput(m->display, m->root, 0);
+        // 🚀 修复：增加 Display 参数 m->display
+        XUngrabButton(m->display, AnyButton, AnyModifier, m->root); 
+		XSelectInput(m->display, m->root, 0); 
 	}
 
 	if (runtime.dpy)
@@ -1793,8 +1835,8 @@ void quit(void)
 
 int main(void)
 {
-	setup();
-	run();
-	quit();
+        setup();
+        run();
+        quit();
 	return 0;
 }
