@@ -3,6 +3,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
 #include <X11/Xatom.h>
@@ -62,6 +64,8 @@ static struct dpy *g_dpy = NULL;
 #define LENGTH(X) (sizeof X / sizeof X[0])
 
 static void quit(const union Arg *arg);
+static void spawn(const union Arg *arg);
+
 static void handle_maprequest(XEvent *e);
 static void handle_buttonpress(XEvent *e);
 static void handle_destroynotify(XEvent *e);
@@ -80,11 +84,24 @@ static void init(void);
 static void listen(void);
 static void handle(XEvent *e);
 
+static char *termcmd[] = { "xterm", NULL };
+
 static const struct Key keys[] = {
 	{ MODKEY, XK_q, quit, {0} },
+	{ MODKEY, XK_Return, spawn, {.v = termcmd } },
 };
 
 void (*handler[LASTEvent]) (XEvent *) = { 0 };
+
+static void spawn(const union Arg *arg)
+{
+	if (fork() == 0) {
+		setsid();
+		execvp(((char **)arg->v)[0], (char **)arg->v);
+		fprintf(stderr, "dwm: execvp %s failed\n", ((char **)arg->v)[0]);
+		exit(1);
+	}
+}
 
 static void dpy_init(void)
 {
