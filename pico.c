@@ -21,6 +21,7 @@
 #define BAR_TEXT_COLOR 0xeeeeee
 #define BORDER_FOCUS_COLOR 0xFF0000
 #define BORDER_NORMAL_COLOR 0x000000
+#define BORDER_WIDTH 1
 
 enum {
 	EV_KeyPress = 2,
@@ -208,7 +209,7 @@ static void client_add(Window w, XWindowAttributes *wa)
 	new->next = ws->clients;
 	ws->clients = new;
 
-	XSetWindowBorderWidth(dpy, w, 1);
+	XSetWindowBorderWidth(dpy, w, BORDER_WIDTH);
 	XSetWindowBorder(dpy, w, BORDER_NORMAL_COLOR);
 
 	client_focus(new);
