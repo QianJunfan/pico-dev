@@ -70,6 +70,14 @@ int main(void)
     if(!(dpy = XOpenDisplay(NULL))) return 1;
 
     
+    if (XSelectInput(dpy, DefaultRootWindow(dpy),
+                     SubstructureRedirectMask | SubstructureNotifyMask) & BadAccess)
+    {
+        fprintf(stderr, "Another window manager is already running. Exiting.\n");
+        XCloseDisplay(dpy);
+        return 1;
+    }
+    
     launch_xterm();
     
     grab_input(dpy);
