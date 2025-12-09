@@ -486,7 +486,7 @@ static int xerror(Display *dpy, XErrorEvent *er)
 	return 0;
 }
 
-static void updatenumlockmask(void)
+void updatenumlockmask(void)
 {
 	unsigned int i, j;
 	XModifierKeymap *modmap;
