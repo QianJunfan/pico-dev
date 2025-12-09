@@ -1,5 +1,5 @@
 #include <X11/Xlib.h>
-#include <X11/keysym.h> 
+#include <X11/keysym.h>
 #include <X11/XKBlib.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,14 +9,15 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-#define SUPER_MASK Mod4Mask 
+#define SUPER_MASK Mod4Mask
+#define IGNORE_MODS (LockMask | Mod2Mask)
 
 void launch_xterm() {
     if (fork() == 0) {
-        setsid(); 
+        setsid();
         execlp("xterm", "xterm", NULL);
         perror("Failed to launch xterm");
-        _exit(EXIT_FAILURE); 
+        _exit(EXIT_FAILURE);
     }
 }
 
@@ -32,26 +33,26 @@ int main(void)
         return 1;
     }
 
-    if (XSelectInput(dpy, DefaultRootWindow(dpy), 
-                     SubstructureRedirectMask | SubstructureNotifyMask) & BadAccess) 
+    if (XSelectInput(dpy, DefaultRootWindow(dpy),
+                     SubstructureRedirectMask | SubstructureNotifyMask) & BadAccess)
     {
         fprintf(stderr, "pico: Another window manager is already running.\n");
         XCloseDisplay(dpy);
         return 1;
     }
-    
+
     XGrabKey(dpy, XKeysymToKeycode(dpy, XStringToKeysym("t")), SUPER_MASK,
              DefaultRootWindow(dpy), True, GrabModeAsync, GrabModeAsync);
-    
+
     XGrabKey(dpy, XKeysymToKeycode(dpy, XStringToKeysym("q")), SUPER_MASK,
              DefaultRootWindow(dpy), True, GrabModeAsync, GrabModeAsync);
-    
+
     XGrabKey(dpy, XKeysymToKeycode(dpy, XStringToKeysym("F1")), SUPER_MASK,
              DefaultRootWindow(dpy), True, GrabModeAsync, GrabModeAsync);
-             
+
     XGrabButton(dpy, 1, SUPER_MASK, DefaultRootWindow(dpy), True,
                 ButtonPressMask|ButtonReleaseMask|PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
-    
+
     XGrabButton(dpy, 3, SUPER_MASK, DefaultRootWindow(dpy), True,
                 ButtonPressMask|ButtonReleaseMask|PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
 
@@ -61,17 +62,19 @@ int main(void)
         XNextEvent(dpy, &ev);
         if(ev.type == KeyPress)
         {
-            KeySym keysym = XkbKeycodeToKeysym(dpy, ev.xkey.keycode, 0, 0); 
+            KeySym keysym = XkbKeycodeToKeysym(dpy, ev.xkey.keycode, 0, 0);
 
-            if (keysym == XK_q && (ev.xkey.state & SUPER_MASK)) {
+            unsigned int clean_state = ev.xkey.state & ~IGNORE_MODS;
+
+            if (keysym == XK_q && (clean_state == SUPER_MASK)) {
                 XCloseDisplay(dpy);
                 return 0;
             }
 
-            if (keysym == XK_t && (ev.xkey.state & SUPER_MASK)) {
+            if (keysym == XK_t && (clean_state == SUPER_MASK)) {
                 launch_xterm();
             }
-            
+
             if(ev.xkey.subwindow != None)
                 XRaiseWindow(dpy, ev.xkey.subwindow);
         }
@@ -81,8 +84,13 @@ int main(void)
         }
         else if(ev.type == ButtonPress && ev.xbutton.subwindow != None)
         {
-            XGetWindowAttributes(dpy, ev.xbutton.subwindow, &attr);
-            start = ev.xbutton;
+            unsigned int clean_state = ev.xbutton.state & ~IGNORE_MODS;
+
+            if (clean_state == SUPER_MASK)
+            {
+                XGetWindowAttributes(dpy, ev.xbutton.subwindow, &attr);
+                start = ev.xbutton;
+            }
         }
         else if(ev.type == MotionNotify && start.subwindow != None)
         {
@@ -91,10 +99,10 @@ int main(void)
 
             int new_x = attr.x + (start.button==1 ? xdiff : 0);
             int new_y = attr.y + (start.button==1 ? ydiff : 0);
-            
+
             int new_width = MAX(1, attr.width + (start.button==3 ? xdiff : 0));
             int new_height = MAX(1, attr.height + (start.button==3 ? ydiff : 0));
-            
+
             XMoveResizeWindow(dpy, start.subwindow,
                 new_x,
                 new_y,
