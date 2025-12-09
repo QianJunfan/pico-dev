@@ -735,6 +735,8 @@ void c_unfoc(struct cli *c)
 
 void t_sel(struct tab *t)
 {
+	struct cli *c;
+	
 	if (!t || t == runtime.tab_sel)
 		return;
 
@@ -755,11 +757,23 @@ void t_sel(struct tab *t)
 		c_sel(t->cli_sel);
 	}
 
+	// ----------------------------------------------------
+	// 新增逻辑：显示此 Tab 上的所有客户端
+	// ----------------------------------------------------
+	for (c = t->clis; c; c = c->next) {
+		if (c->is_hide) {
+			c_show(c);
+		}
+	}
+	// ----------------------------------------------------
+
 	m_update(t->mon);
 }
 
 void t_unsel(struct tab *t)
 {
+	struct cli *c;
+
 	if (!t || !t->is_sel)
 		return;
 
@@ -768,8 +782,15 @@ void t_unsel(struct tab *t)
 
 	if (t->cli_sel)
 		c_unsel(t->cli_sel);
-}
 
+	// ----------------------------------------------------
+	for (c = t->clis; c; c = c->next) {
+		if (!c->is_hide) {
+			c_hide(c);
+		}
+	}
+	// ----------------------------------------------------
+}
 void d_sel(struct cli *c)
 {
 	struct doc *d = &runtime.doc;
