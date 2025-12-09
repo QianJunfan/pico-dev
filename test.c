@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <X11/cursorfont.h>
 #include <X11/keysym.h>
@@ -10,6 +11,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xproto.h>
 #include <X11/Xutil.h>
+#include <X11/Xft/Xft.h>
 #include <X11/XKBlib.h>
 
 
@@ -27,36 +29,33 @@ struct Key {
 struct cli {
 	Window win;
 	struct cli *next;
-	struct dpy *dpy;
-	union {
-		int data[4];
-		struct {
-			int x, y, w, h;
-		};
-	} geo;
+	struct Monitor *mon;
+
+	int x, y, w, h;
+	int oldx, oldy, oldw, oldh;
+
+	int isfloating;
 };
 
-struct dpy {
+struct Monitor {
 	uint64_t id;
 	struct _XDisplay *display;
-	uint64_t cli_cnt;
+
 	struct cli *clis;
-	struct cli *cli_focus;
+	struct cli *sel;
+	struct cli *cli_drag;
+
 	Window root;
-	union {
-		int data[4];
-		struct {
-			int x, y;
-			int w, h;
-		};
-	} geo;
+	int wx, wy, ww, wh;
+
+	int ptr_x, ptr_y;
 };
 
 struct {	
-	struct dpy *sel_dpy;
+	struct Monitor *sel_mon;
 } runtime;
 
-static struct dpy *g_dpy = NULL;
+static struct Monitor *g_mon = NULL;
 
 #define MODKEY Mod4Mask
 #define LENGTH(X) (sizeof X / sizeof X[0])
@@ -66,17 +65,18 @@ static void spawn(const union Arg *arg);
 
 static void handle_maprequest(XEvent *e);
 static void handle_buttonpress(XEvent *e);
+static void handle_buttonrelease(XEvent *e);
+static void handle_motionnotify(XEvent *e);
 static void handle_destroynotify(XEvent *e);
 static void handle_keypress(XEvent *e);
 
-static void dpy_init(void);
-static void dpy_destroy(void);
+static void mon_init(void);
+static void mon_destroy(void);
 
 static void cli_init(Window w);
 static void cli_destroy(struct cli *c);
-static void cli_resize(struct cli *tar, int w, int h);
-static void cli_move(struct cli *tar, int x, int y);
-static void cli_focus(struct cli *tar);
+static void cli_resize(struct cli *c, int x, int y, int w, int h);
+static void cli_focus(struct cli *c);
 
 static void init(void);
 static void listen(void);
@@ -96,49 +96,48 @@ static void spawn(const union Arg *arg)
 	if (fork() == 0) {
 		setsid();
 		execvp(((char **)arg->v)[0], (char **)arg->v);
-		fprintf(stderr, "dwm: execvp %s failed\n", ((char **)arg->v)[0]);
+		fprintf(stderr, "Minimal WM: execvp %s failed\n", ((char **)arg->v)[0]);
 		exit(1);
 	}
 }
 
-static void dpy_init(void)
+static void mon_init(void)
 {
-	g_dpy = malloc(sizeof(struct dpy));
-	if (!g_dpy) {
-		fprintf(stderr, "Error: Could not allocate memory for dpy.\n");
+	g_mon = malloc(sizeof(struct Monitor));
+	if (!g_mon) {
+		fprintf(stderr, "Error: Could not allocate memory for Monitor.\n");
 		exit(1);
 	}
-	g_dpy->display = XOpenDisplay(NULL);
-	if (!g_dpy->display) {
+	g_mon->display = XOpenDisplay(NULL);
+	if (!g_mon->display) {
 		fprintf(stderr, "Error: Cannot open display.\n");
 		exit(1);
 	}
 
-	g_dpy->root = DefaultRootWindow(g_dpy->display);
-	g_dpy->cli_cnt = 0;
-	g_dpy->clis = NULL;
-	g_dpy->cli_focus = NULL;
-	runtime.sel_dpy = g_dpy;
+	g_mon->root = DefaultRootWindow(g_mon->display);
+	g_mon->clis = NULL;
+	g_mon->sel = NULL;
+	g_mon->cli_drag = NULL;
+	runtime.sel_mon = g_mon;
 
-	g_dpy->geo.x = 0;
-	g_dpy->geo.y = 0;
-	g_dpy->geo.w = DisplayWidth(g_dpy->display, DefaultScreen(g_dpy->display));
-	g_dpy->geo.h = DisplayHeight(g_dpy->display, DefaultScreen(g_dpy->display));
+	g_mon->wx = g_mon->wy = 0;
+	g_mon->ww = DisplayWidth(g_mon->display, DefaultScreen(g_mon->display));
+	g_mon->wh = DisplayHeight(g_mon->display, DefaultScreen(g_mon->display));
 	
-	if (XSelectInput(g_dpy->display, g_dpy->root, 
+	if (XSelectInput(g_mon->display, g_mon->root, 
 			SubstructureRedirectMask | KeyPressMask | ButtonPressMask | SubstructureNotifyMask) == BadAccess) {
 		fprintf(stderr, "Fatal: Another WM is already running.\n");
-		XCloseDisplay(g_dpy->display);
-		free(g_dpy);
+		XCloseDisplay(g_mon->display);
+		free(g_mon);
 		exit(1);
 	}
 }
 
-static void dpy_destroy(void)
+static void mon_destroy(void)
 {
-	if (g_dpy && g_dpy->display) {
-		XCloseDisplay(g_dpy->display);
-		free(g_dpy);
+	if (g_mon && g_mon->display) {
+		XCloseDisplay(g_mon->display);
+		free(g_mon);
 	}
 }
 
@@ -150,24 +149,25 @@ static void cli_init(Window w)
 		return;
 
 	c->win = w;
-	c->dpy = g_dpy;
+	c->mon = g_mon;
+	c->isfloating = 1; 
 	
-	c->geo.x = g_dpy->geo.w / 4;
-	c->geo.y = g_dpy->geo.h / 4;
-	c->geo.w = g_dpy->geo.w / 2;
-	c->geo.h = g_dpy->geo.h / 2;
+	c->x = g_mon->ww / 4;
+	c->y = g_mon->wh / 4;
+	c->w = g_mon->ww / 2;
+	c->h = g_mon->wh / 2;
 
-	c->next = g_dpy->clis;
-	g_dpy->clis = c;
-	g_dpy->cli_cnt++;
+    c->oldx = c->x; c->oldy = c->y; c->oldw = c->w; c->oldh = c->h;
 
-	cli_move(c, c->geo.x, c->geo.y);
-	cli_resize(c, c->geo.w, c->geo.h);
-	XMapWindow(g_dpy->display, c->win);
+	c->next = g_mon->clis;
+	g_mon->clis = c;
+
+	cli_resize(c, c->x, c->y, c->w, c->h);
+	XMapWindow(g_mon->display, c->win);
 	
 	cli_focus(c);
 	
-	XSelectInput(g_dpy->display, c->win, StructureNotifyMask);
+	XSelectInput(g_mon->display, c->win, StructureNotifyMask);
 }
 
 static void cli_destroy(struct cli *c)
@@ -176,72 +176,74 @@ static void cli_destroy(struct cli *c)
 	if (!c)
 		return;
 
-	for (curr = &g_dpy->clis; *curr; curr = &(*curr)->next) {
+	for (curr = &g_mon->clis; *curr; curr = &(*curr)->next) {
 		if (*curr == c) {
 			*curr = c->next;
 			break;
 		}
 	}
 
-	if (c == g_dpy->cli_focus)
-		g_dpy->cli_focus = NULL;
+	if (c == g_mon->sel)
+		g_mon->sel = NULL;
 	
-	g_dpy->cli_cnt--;
+	if (c == g_mon->cli_drag)
+		g_mon->cli_drag = NULL;
+		
 	free(c);
 }
 
-static void cli_resize(struct cli *tar, int w, int h)
+static void cli_resize(struct cli *c, int x, int y, int w, int h)
 {
 	XWindowChanges wc;
 
-	tar->geo.w = w;
-	tar->geo.h = h;
+	c->x = x;
+	c->y = y;
+	c->w = w;
+	c->h = h;
 
+	wc.x = x;
+	wc.y = y;
 	wc.width = w;
 	wc.height = h;
 
-	XConfigureWindow(tar->dpy->display, tar->win, CWWidth | CWHeight, &wc);
-	XSync(tar->dpy->display, False);
+	XConfigureWindow(c->mon->display, c->win, CWX | CWY | CWWidth | CWHeight, &wc);
+	XSync(c->mon->display, False);
 }
 
-static void cli_move(struct cli *tar, int x, int y)
+static void cli_focus(struct cli *c)
 {
-	XWindowChanges wc;
-	
-	tar->geo.x = x;
-	tar->geo.y = y;
-	
-	wc.x = x;
-	wc.y = y;
-
-	XConfigureWindow(tar->dpy->display, tar->win, CWX | CWY, &wc);
-	XSync(tar->dpy->display, False);
-}
-
-static void cli_focus(struct cli *tar)
-{
-	if (!tar)
+	if (!c)
 		return;
 
-	if (g_dpy->cli_focus && g_dpy->cli_focus != tar) {
+	if (g_mon->sel && g_mon->sel != c) {
 		
 	}
 	
-	g_dpy->cli_focus = tar;
-	XSetInputFocus(g_dpy->display, tar->win, RevertToPointerRoot, CurrentTime);
+	g_mon->sel = c;
+	XSetInputFocus(g_mon->display, c->win, RevertToPointerRoot, CurrentTime);
 }
 
 static void init(void)
 {
-	dpy_init();
+	mon_init();
 
 	for (int i = 0; i < LENGTH(keys); i++) {
-		XGrabKey(g_dpy->display, XKeysymToKeycode(g_dpy->display, keys[i].keysym), 
-			keys[i].mod, g_dpy->root, True, GrabModeAsync, GrabModeAsync);
+		XGrabKey(g_mon->display, XKeysymToKeycode(g_mon->display, keys[i].keysym), 
+			keys[i].mod, g_mon->root, True, GrabModeAsync, GrabModeAsync);
 	}
+
+	XGrabButton(g_mon->display, Button1, MODKEY, g_mon->root,
+		True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+		GrabModeAsync, GrabModeAsync, None, None);
+
+	XGrabButton(g_mon->display, Button3, MODKEY, g_mon->root,
+		True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+		GrabModeAsync, GrabModeAsync, None, None);
 
 	handler[MapRequest]    = handle_maprequest;
 	handler[ButtonPress]   = handle_buttonpress;
+	handler[ButtonRelease] = handle_buttonrelease;
+	handler[MotionNotify]  = handle_motionnotify;
 	handler[DestroyNotify] = handle_destroynotify;
 	handler[KeyPress]      = handle_keypress;
 	
@@ -251,7 +253,7 @@ static void init(void)
 static void quit(const union Arg *arg)
 {
 	printf("Minimal Floating WM shutting down.\n");
-	dpy_destroy();
+	mon_destroy();
 	exit(0);
 }
 
@@ -266,7 +268,7 @@ static void listen(void)
 {
 	XEvent ev;
 	while (1) {
-		XNextEvent(g_dpy->display, &ev);
+		XNextEvent(g_mon->display, &ev);
 		handle(&ev);
 	}
 }
@@ -275,7 +277,7 @@ static void handle_maprequest(XEvent *e)
 {
 	XMapRequestEvent *ev = &e->xmaprequest;
 	struct cli *c;
-	for (c = g_dpy->clis; c; c = c->next) {
+	for (c = g_mon->clis; c; c = c->next) {
 		if (c->win == ev->window)
 			return;
 	}
@@ -288,22 +290,9 @@ static void handle_destroynotify(XEvent *e)
 	XDestroyWindowEvent *ev = &e->xdestroywindow;
 	
 	struct cli *c;
-	for (c = g_dpy->clis; c; c = c->next) {
+	for (c = g_mon->clis; c; c = c->next) {
 		if (c->win == ev->window) {
 			cli_destroy(c);
-			return;
-		}
-	}
-}
-
-static void handle_buttonpress(XEvent *e)
-{
-	XButtonEvent *ev = &e->xbutton;
-
-	struct cli *c;
-	for (c = g_dpy->clis; c; c = c->next) {
-		if (c->win == ev->subwindow || c->win == ev->window) {
-			cli_focus(c);
 			return;
 		}
 	}
@@ -314,7 +303,7 @@ static void handle_keypress(XEvent *e)
 	XKeyEvent *ev = &e->xkey;
 	KeySym keysym;
 
-	keysym = XkbKeycodeToKeysym(g_dpy->display, (KeyCode)ev->keycode, 0, 0);
+	keysym = XkbKeycodeToKeysym(g_mon->display, (KeyCode)ev->keycode, 0, 0);
 	unsigned int cleanmask = ev->state & (MODKEY | ShiftMask | ControlMask); 
 	
 	for (int i = 0; i < LENGTH(keys); i++) {
@@ -324,6 +313,63 @@ static void handle_keypress(XEvent *e)
 		}
 	}
 }
+
+static void handle_buttonpress(XEvent *e)
+{
+	XButtonEvent *ev = &e->xbutton;
+	struct cli *c;
+	
+	for (c = g_mon->clis; c; c = c->next) {
+		if (c->win == ev->subwindow || c->win == ev->window) {
+			cli_focus(c);
+			break;
+		}
+	}
+
+	if (!c || ev->subwindow == None || ev->state != MODKEY)
+		return;
+
+	XGrabPointer(g_mon->display, g_mon->root, False,
+		ButtonReleaseMask | PointerMotionMask,
+		GrabModeAsync, GrabModeAsync, None, None, CurrentTime);
+
+	g_mon->ptr_x = ev->x_root;
+	g_mon->ptr_y = ev->y_root;
+	g_mon->cli_drag = c;
+}
+
+static void handle_motionnotify(XEvent *e)
+{
+	XMotionEvent *ev = &e->xmotion;
+	struct cli *c = g_mon->cli_drag;
+	
+	if (!c)
+		return;
+
+	int dx = ev->x_root - g_mon->ptr_x;
+	int dy = ev->y_root - g_mon->ptr_y;
+	
+	if (ev->state & Button1Mask) { 
+		cli_resize(c, c->x + dx, c->y + dy, c->w, c->h);
+	} else if (ev->state & Button3Mask) { 
+		int new_w = c->w + dx;
+		int new_h = c->h + dy;
+		if (new_w < 50) new_w = 50; 
+		if (new_h < 50) new_h = 50; 
+
+		cli_resize(c, c->x, c->y, new_w, new_h);
+	}
+
+	g_mon->ptr_x = ev->x_root;
+	g_mon->ptr_y = ev->y_root;
+}
+
+static void handle_buttonrelease(XEvent *e)
+{
+	XUngrabPointer(g_mon->display, CurrentTime);
+	g_mon->cli_drag = NULL;
+}
+
 
 int main(void)
 {
