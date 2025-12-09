@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include <stdbool.h>
+#include <stbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -76,7 +76,6 @@ struct tab {
 	struct cli *cli_sel;
 
 	uint64_t cli_til_cnt;
-	uint64_t til_cols, til_rows;
 	struct cli **clis_til; /* Array of tiled clients */
 
 	uint64_t cli_flt_cnt;
@@ -154,7 +153,7 @@ static int xerror(Display *dpy, XErrorEvent *ee)
         case 12: request_name = "XChangeWindowAttributes/XSelectInput"; break; // Error 2 (BadValue)
         case 43: request_name = "XGrabKey"; break;                             // Error 8 (BadMatch)
         case 7:  request_name = "XGrabButton"; break;
-        case 44: request_name = "XGrabButton (Ungrab)"; break; // Request 44 is UngrabKey/UngrabButton
+        case 44: request_name = "XUngrabKey/XUngrabButton"; break; // Request 44 is UngrabKey/UngrabButton
         case 42: request_name = "XGrabKey"; break; // Request 42 is XGrabKey
         default: break; 
     }
@@ -166,7 +165,6 @@ static int xerror(Display *dpy, XErrorEvent *ee)
 		exit(1);
 	}
     
-    // 修复：使用更详细的打印格式，包含 ResourceID
 	fprintf(stderr, "pico: fatal: unhandled X error %u (Code: %s/%u, Resource: %lu, Serial: %lu)\n", 
             ee->error_code, request_name, ee->request_code, ee->resourceid, ee->serial);
             
@@ -1275,38 +1273,6 @@ static KeyCode key_get(KeySym keysym)
 
 	return XKeysymToKeycode(m->display, keysym);
 }
-/* ************************************************************************* */
-/* ** MOUSE GRAB ** */
-/* ************************************************************************* */
-
-static void mouse_grab(void)
-{
-	struct mon *m = runtime.mons;
-    // NumLock 状态所需的 Mod 掩码： 0 (无锁) 和 XK_NUM (Mod2Mask)
-    const unsigned int numlock_masks[] = { 0, XK_NUM }; 
-    unsigned int j;
-    
-	if (!m)
-		return;
-
-    // 清除现有的 Button 抓取
-    XUngrabButton(m->display, AnyButton, AnyModifier, m->root);
-
-    // 遍历所有 NumLock 组合 (0 和 Mod2Mask)
-    for (j = 0; j < sizeof(numlock_masks) / sizeof(*numlock_masks); j++) {
-        // 抓取 Super + Button1 (移动)
-        XGrabButton(m->display, Button1, MOUSE_MOD | numlock_masks[j], m->root,
-                    True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
-                    GrabModeAsync, GrabModeAsync, None, None);
-
-        // 抓取 Super + Button3 (缩放)
-        XGrabButton(m->display, Button3, MOUSE_MOD | numlock_masks[j], m->root,
-                    True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
-                    GrabModeAsync, GrabModeAsync, None, None);
-    }
-	log_action("Mouse grabs (Button1/3 + MOUSE_MOD) completed on root window");
-}
-
 static void key_grab(void)
 {
 	struct mon *m = runtime.mons;
@@ -1338,6 +1304,38 @@ static void key_grab(void)
 	}
 	log_action("Key grabs completed");
 }
+
+/* ************************************************************************* */
+/* ** MOUSE GRAB ** */
+/* ************************************************************************* */
+
+static void mouse_grab(void)
+{
+	struct mon *m = runtime.mons;
+    const unsigned int numlock_masks[] = { 0, XK_NUM }; 
+    unsigned int j;
+    
+	if (!m)
+		return;
+
+    // 🚀 修复：增加 Display 参数 m->display
+    XUngrabButton(m->display, AnyButton, AnyModifier, m->root);
+    
+    // 遍历所有 NumLock 组合 (0 和 Mod2Mask)
+    for (j = 0; j < sizeof(numlock_masks) / sizeof(*numlock_masks); j++) {
+        // 抓取 Super + Button1 (移动)
+        XGrabButton(m->display, Button1, MOUSE_MOD | numlock_masks[j], m->root,
+                    True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
+
+        // 抓取 Super + Button3 (缩放)
+        XGrabButton(m->display, Button3, MOUSE_MOD | numlock_masks[j], m->root,
+                    True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
+    }
+	log_action("Mouse grabs (Button1/3 + MOUSE_MOD) completed on root window");
+}
+
 
 static void key_handle(XEvent *e)
 {
@@ -1393,8 +1391,8 @@ static void handle_maprequest(XEvent *e)
 	c->flt_y = c->y;
 	c->flt_w = c->w;
 	c->flt_h = c->h;
-    
-    // 初始化拖拽数据，防止后续拖拽逻辑读取未初始化内存
+
+    // 初始化拖拽数据
     c->drag_x = c->x;
     c->drag_y = c->y;
     c->drag_w = c->w;
@@ -1414,7 +1412,7 @@ static void handle_maprequest(XEvent *e)
 	// 确保 c_attach_t 在 XSelectInput 之前调用，以设置 c->mon
 	c_attach_t(c, t); 
 
-	// 🚀 核心修复：添加 ButtonPressMask，允许 WM 接收鼠标点击事件
+	// 核心修复：添加 ButtonPressMask，允许 WM 接收鼠标点击事件
 	XSelectInput(c->mon->display, c->win,
 		EnterWindowMask | FocusChangeMask | ButtonPressMask);
 
@@ -1485,8 +1483,14 @@ static void handle_buttonpress(XEvent *e)
 	
 	log_action("ButtonPress: Button %u on window 0x%lx, state 0x%x", ev->button, ev->window, ev->state);
 
-	if (!(c = c_fetch(ev->window)))
-		return;
+	if (!(c = c_fetch(ev->window))) {
+        if (ev->window != RootWindowOfScreen(DefaultScreenOfDisplay(dpy))) {
+            return;
+        }
+        c = runtime.cli_sel; // 尝试对当前选中的窗口执行操作
+        if (!c) return;
+
+	}
 
 	c_sel(c);
 
@@ -1518,7 +1522,6 @@ static void handle_buttonpress(XEvent *e)
 		runtime.mouse_mode = MOUSE_MODE_MOVE;
 		log_action("  Starting MOVE mode for client 0x%lx", c->win);
 
-		// 核心修复：在根窗口上抓取指针
 		XGrabPointer(dpy, root, False, 
 			     ButtonMotionMask | ButtonReleaseMask,
 			     GrabModeAsync, GrabModeAsync,
@@ -1528,7 +1531,6 @@ static void handle_buttonpress(XEvent *e)
 		runtime.mouse_mode = MOUSE_MODE_RESIZE;
 		log_action("  Starting RESIZE mode for client 0x%lx", c->win);
 
-		// 核心修复：在根窗口上抓取指针
 		XGrabPointer(dpy, root, False, 
 			     ButtonMotionMask | ButtonReleaseMask,
 			     GrabModeAsync, GrabModeAsync,
@@ -1793,7 +1795,9 @@ void setup(void)
     runtime.atom_protocols = XInternAtom(runtime.dpy, "WM_PROTOCOLS", False);
     runtime.atom_delete_window = XInternAtom(runtime.dpy, "WM_DELETE_WINDOW", False);
 	log_action("WM_PROTOCOLS atoms fetched");
+	
 	key_grab();
+    mouse_grab(); // 调用 mouse_grab 抢占鼠标事件
 	
 	XSync(runtime.dpy, False);
 	log_action("Setup complete. Entering main loop.");
@@ -1806,9 +1810,6 @@ void run(void)
 	while (1) {
 		XNextEvent(runtime.dpy, &ev); 
 		
-		// 日志: 记录接收到的事件类型
-		// log_action("Received XEvent type: %d", ev.type);
-
         if (handler[ev.type])
             handler[ev.type](&ev);
 	}
@@ -1820,7 +1821,9 @@ void quit(void)
 	
 	log_action("Quitting WM");
 	for (m = runtime.mons; m; m = m->next) {
-		XUngrabButton(m->display, AnyButton, AnyModifier, m->root);
+		XUngrabKey(m->display, AnyKey, AnyModifier, m->root);
+        // 🚀 修复：增加 Display 参数 m->display
+        XUngrabButton(m->display, AnyButton, AnyModifier, m->root); 
 		XSelectInput(m->display, m->root, 0); 
 	}
 
