@@ -128,12 +128,12 @@ static int xerror(Display *dpy, XErrorEvent *ee)
 {
     const char *request_name = "Unknown";
     
-    // 增加请求代码到 Xlib 函数名的映射，帮助定位问题
+    // 增加请求代码到 Xlib 函数名的映射
     switch (ee->request_code) {
         case 12: request_name = "XChangeWindowAttributes/XSelectInput"; break; // Error 2 (BadValue)
         case 43: request_name = "XGrabKey"; break;                             // Error 8 (BadMatch)
-        case 10: request_name = "XUnmapWindow"; break;
         case 7:  request_name = "XGrabButton"; break;
+        case 44: request_name = "XGrabButton (Ungrab)"; break; // Request 44 is UngrabKey/UngrabButton
         default: break; 
     }
 
@@ -144,7 +144,7 @@ static int xerror(Display *dpy, XErrorEvent *ee)
 		exit(1);
 	}
     
-    // 修复：使用更详细的打印格式
+    // 修复：使用更详细的打印格式，包含 ResourceID
 	fprintf(stderr, "pico: fatal: unhandled X error %u (Code: %s/%u, Resource: %lu, Serial: %lu)\n", 
             ee->error_code, request_name, ee->request_code, ee->resourceid, ee->serial);
             
@@ -1180,12 +1180,14 @@ static KeyCode key_get(KeySym keysym)
 
 	return XKeysymToKeycode(m->display, keysym);
 }
-
 static void key_grab(void)
 {
 	struct mon *m = runtime.mons;
 	unsigned int i;
 	KeyCode code;
+    // NumLock 状态所需的 Mod 掩码： 0 (无锁) 和 XK_NUM (Mod2Mask)
+    const unsigned int numlock_masks[] = { 0, XK_NUM }; 
+    unsigned int j;
 
 	if (!m)
 		return;
@@ -1194,10 +1196,18 @@ static void key_grab(void)
 
 	for (i = 0; i < sizeof(keys) / sizeof(*keys); i++) {
 		code = key_get(keys[i].keysym);
-		if (code) {
-			XGrabKey(m->display, code, keys[i].mod, m->root,
-				True, GrabModeAsync, GrabModeAsync);
-		}
+		
+		if (code == 0) {
+            // 打印警告，如果是无效 KeySym，跳过抓取，避免 BadMatch
+            fprintf(stderr, "pico: Warning: KeySym %lu not mapped to a KeyCode. Skipping grab.\n", keys[i].keysym);
+            continue;
+        }
+        
+        // 修复：遍历所有 NumLock 组合，确保抓取成功
+        for (j = 0; j < sizeof(numlock_masks) / sizeof(*numlock_masks); j++) {
+            XGrabKey(m->display, code, keys[i].mod | numlock_masks[j], m->root,
+                True, GrabModeAsync, GrabModeAsync);
+        }
 	}
 }
 
@@ -1321,6 +1331,7 @@ static void handle_buttonpress(XEvent *e)
 	XButtonEvent *ev = &e->xbutton;
 	struct cli *c;
 	Display *dpy = ev->display;
+    Window root; // 新增：用于存储根窗口
 
 	if (!(c = c_fetch(ev->window)))
 		return;
@@ -1336,36 +1347,35 @@ static void handle_buttonpress(XEvent *e)
 	runtime.cli_mouse = c;
 	c_raise(c);
     
-    // 修复 1：保存拖拽/缩放的初始状态和根窗口坐标
+    // 确保 monitor 存在，并获取根窗口
+    if (!c->mon) return; 
+    root = c->mon->root; 
+
+    // 修复：保存拖拽/缩放的初始状态和根窗口坐标
     c->drag_x = c->x;
     c->drag_y = c->y;
     c->drag_w = c->w;
     c->drag_h = c->h;
     c->drag_root_x = ev->x_root;
     c->drag_root_y = ev->y_root;
-    // --- 修复 1 结束 ---
 
 	if (ev->button == Button1) {
 		runtime.mouse_mode = MOUSE_MODE_MOVE;
 
-		XGrabPointer(dpy, c->win, False,
+		// 核心修复：在根窗口上抓取指针
+		XGrabPointer(dpy, root, False, // <-- 将 c->win 改为 root
 			     ButtonMotionMask | ButtonReleaseMask,
 			     GrabModeAsync, GrabModeAsync,
 			     None, None, CurrentTime);
-
-		// [移除] XWarpPointer 以简化移动逻辑
-        // XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w / 2, c->h / 2);
 
 	} else if (ev->button == Button3) {
 		runtime.mouse_mode = MOUSE_MODE_RESIZE;
 
-		XGrabPointer(dpy, c->win, False,
+		// 核心修复：在根窗口上抓取指针
+		XGrabPointer(dpy, root, False, // <-- 将 c->win 改为 root
 			     ButtonMotionMask | ButtonReleaseMask,
 			     GrabModeAsync, GrabModeAsync,
 			     None, None, CurrentTime);
-
-        // [移除] XWarpPointer 以简化缩放逻辑
-        // XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w, c->h);
 	}
 }
 static void handle_motionnotify(XEvent *e)
