@@ -8,6 +8,8 @@
 #include <X11/keysym.h>
 #include <X11/Xutil.h>
 #include <stdarg.h>
+#include <time.h> // 新增：用于日志时间戳
+#include <string.h> // 新增：用于日志路径处理
 
 enum mouse_mode {
 	MOUSE_MODE_NONE,
@@ -98,6 +100,9 @@ struct mon {
 	bool is_size_change : 1;
 };
 
+// 新增全局文件指针
+static FILE *logfile = NULL;
+
 static struct {
 	struct mon *mon_sel;
 	struct tab *tab_sel;
@@ -114,20 +119,54 @@ static struct {
 	Display *dpy;
 } runtime;
 
+// 修改 log_action 函数，增加时间戳和上下文，并写入文件
 static void log_action(const char *format, ...)
 {
 	va_list args;
+    char log_msg[512];
+    char context_buf[128];
+    time_t t = time(NULL);
+    struct tm *tm_info;
 
-	fprintf(stderr, "pico: Log: ");
+    // 获取当前时间
+    tm_info = localtime(&t);
+
+    // 准备上下文信息 (Monitor, Tab, Client)
+    snprintf(context_buf, sizeof(context_buf),
+             "M:0x%lx T:0x%lx C:0x%lx",
+             runtime.mon_sel ? runtime.mon_sel->id : 0,
+             runtime.tab_sel ? runtime.tab_sel->id : 0,
+             runtime.cli_sel ? runtime.cli_sel->win : 0);
+
+    // 格式化主信息
 	va_start(args, format);
-	vfprintf(stderr, format, args);
+    vsnprintf(log_msg, sizeof(log_msg), format, args);
 	va_end(args);
-	fprintf(stderr, "\n");
+
+    // 输出到标准错误 (便于调试)
+	fprintf(stderr, "pico: Log: [%02d:%02d:%02d] [%s] %s\n",
+        tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
+        context_buf, log_msg);
+
+    // 输出到日志文件 (~/devlog)
+    if (logfile) {
+        fprintf(logfile, "[%02d:%02d:%02d] pico: [%s] %s\n",
+                tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec,
+                context_buf, log_msg);
+        fflush(logfile);
+    }
 }
 
 static int xerror(Display *dpy, XErrorEvent *ee)
 {
 	const char *request_name = "Unknown";
+    char context_buf[128];
+    
+    // 准备上下文信息
+    snprintf(context_buf, sizeof(context_buf),
+             "Code: %s/%u, Resource: %lu, Serial: %lu",
+             ee->error_code == 10 ? "BadAccess" : "OtherError",
+             ee->request_code, ee->resourceid, ee->serial);
 
 	switch (ee->request_code) {
 	case 12: request_name = "XChangeWindowAttributes/XSelectInput"; break;
@@ -145,11 +184,9 @@ static int xerror(Display *dpy, XErrorEvent *ee)
 		exit(1);
 	}
 
-	fprintf(stderr,
-		"pico: fatal: unhandled X error %u (Code: %s/%u, "
-		"Resource: %lu, Serial: %lu)\n",
-		ee->error_code, request_name, ee->request_code,
-		ee->resourceid, ee->serial);
+	// 记录所有 X 错误信息到日志
+	log_action("FATAL: Unhandled X error %u (Request: %s) (%s)",
+		ee->error_code, request_name, context_buf);
 
 	return 0;
 }
@@ -732,6 +769,10 @@ void c_unfoc(struct cli *c)
 	log_action("Client unfocus: 0x%lx", c->win);
 	c->is_foc = false;
 }
+
+// ----------------------------------------------------
+// 修复 3A: t_sel 保持不变，它依赖于 t_unsel 和 m_update 来完成工作。
+// ----------------------------------------------------
 void t_sel(struct tab *t)
 {
 	if (!t || t == runtime.tab_sel)
@@ -754,9 +795,12 @@ void t_sel(struct tab *t)
 		c_sel(t->cli_sel);
 	}
 
-	m_update(t->mon); // <-- Tab 切换最终触发 m_update
+	m_update(t->mon); 
 }
 
+// ----------------------------------------------------
+// 修复 3B: t_unsel 强制同步隐藏（已在您的版本中，保持）
+// ----------------------------------------------------
 void t_unsel(struct tab *t)
 {
 	struct cli *c;
@@ -777,12 +821,9 @@ void t_unsel(struct tab *t)
 		}
 	}
     
-	// ----------------------------------------------------
-	// 修复 1: 强制 X 服务器立即处理隐藏请求
-	// ----------------------------------------------------
+	// 强制 X 服务器立即处理隐藏请求
 	if (t->mon && t->mon->display)
 		XSync(t->mon->display, False);
-	// ----------------------------------------------------
 }
 
 
@@ -1199,6 +1240,9 @@ void m_destroy(struct mon *m)
 		m_sel(m_fallback);
 }
 
+// ----------------------------------------------------
+// 修复 3C: m_update 确保强制映射所有客户端（已在您的版本中，保持）
+// ----------------------------------------------------
 void m_update(struct mon *m)
 {
 	struct tab *t;
@@ -1219,15 +1263,12 @@ void m_update(struct mon *m)
 	log_action("Monitor 0x%lx update (layout)", m->id);
 	n_til = t->cli_til_cnt;
 
-	// ----------------------------------------------------
-	// 修复 2A: 强制映射所有浮动窗口
-	// ----------------------------------------------------
+	// 强制映射所有浮动窗口
 	for (c = t->clis_flt; c; c = c->next) {
-		XMapWindow(c->mon->display, c->win); // 强制映射
-		c->is_hide = false; // 清除隐藏标志
+		XMapWindow(c->mon->display, c->win); 
+		c->is_hide = false; 
 		c_raise(c);
 	}
-	// ----------------------------------------------------
 
 	if (n_til == 0)
 		goto end;
@@ -1263,12 +1304,9 @@ void m_update(struct mon *m)
 show_tiled:
 	for (i = 0; i < n_til; i++) {
 		c = t->clis_til[i];
-		// ----------------------------------------------------
-		// 修复 2B: 强制映射所有平铺窗口，并清除隐藏标志
-		// ----------------------------------------------------
+		// 强制映射所有平铺窗口
 		XMapWindow(c->mon->display, c->win);
 		c->is_hide = false; 
-		// ----------------------------------------------------
 	}
 	if (t->cli_sel && t->cli_sel->is_tile)
 		c_raise(t->cli_sel);
@@ -1304,9 +1342,8 @@ static void key_grab(void)
 		code = key_get(keys[i].keysym);
 
 		if (code == 0) {
-			fprintf(stderr, "pico: Warning: KeySym %lu not mapped "
-				"to a KeyCode. Skipping grab.\n",
-				keys[i].keysym);
+			log_action("Warning: KeySym %s (0x%lx) not mapped to a KeyCode. Skipping grab.",
+				XKeysymToString(keys[i].keysym), keys[i].keysym);
 			continue;
 		}
 
@@ -1427,11 +1464,18 @@ static void handle_maprequest(XEvent *e)
 		log_action("  Client is tiled.");
 		c_tile(c);
 	}
-
-	XMapWindow(c->mon->display, c->win);
-	c_sel(c);
-	m_update(t->mon);
-
+    
+    // 如果客户端被添加到非活动 Tab，需要立即隐藏它。
+    if (t != runtime.tab_sel) {
+        log_action("  Client mapped on UNSELECTED tab 0x%lx. Hiding it immediately.", t->id);
+        c_hide(c);
+        // 不调用 XMapWindow，也不调用 c_sel/m_update
+    } else {
+        XMapWindow(c->mon->display, c->win);
+        c_sel(c);
+        m_update(t->mon);
+    }
+    
 	if (c->mon)
 		XSync(c->mon->display, False);
 }
@@ -1473,6 +1517,12 @@ static void handle_enternotify(XEvent *e)
 
 	if (!(c = c_fetch(ev->window)))
 		return;
+    
+    // 只有当窗口在选中的 Tab 上，才聚焦它
+    if (c->tab != runtime.tab_sel) {
+        log_action("EnterNotify: client 0x%lx ignored (not on selected tab)", c->win);
+        return;
+    }
 
 	log_action("EnterNotify: client 0x%lx entered", c->win);
 	c_foc(c);
@@ -1498,6 +1548,12 @@ static void handle_buttonpress(XEvent *e)
 		if (!c)
 			return;
 	}
+    
+    // 只有当窗口在选中的 Tab 上，才进行操作
+    if (c->tab != runtime.tab_sel && c->win != c->mon->root) {
+        log_action("ButtonPress: client 0x%lx ignored (not on selected tab)", c->win);
+        return;
+    }
 
 	c_sel(c);
 
@@ -1625,6 +1681,12 @@ static void handle_configurerequest(XEvent *e)
 
 	log_action("ConfigureRequest: Window 0x%lx (managed, float: %d)",
 		c->win, c->is_float);
+    
+    // 只有活动 Tab 上的窗口才能通过 ConfigureRequest 更改浮动属性
+    if (c->tab != runtime.tab_sel && c->is_tile) {
+        log_action("  Ignoring ConfigureRequest on unselected tiled client 0x%lx", c->win);
+        return;
+    }
 
 	wc.x = c->x;
 	wc.y = c->y;
@@ -1682,7 +1744,7 @@ static void handle_unmapnotify(XEvent *e)
 		c->is_sel = false;
 		c->is_unmap_by_wm = false;
 
-		if (m_old)
+		if (m_old == runtime.mon_sel) // 只有当旧窗口在当前选中的显示器上时，才更新布局
 			m_update(m_old);
 
 	} else {
@@ -1702,6 +1764,9 @@ static void handle_unmapnotify(XEvent *e)
 	}
 }
 
+// ----------------------------------------------------
+// 修复 3D: MapNotify 关键逻辑修复
+// ----------------------------------------------------
 static void handle_mapnotify(XEvent *e)
 {
 	XMapEvent *ev = &e->xmap;
@@ -1716,6 +1781,7 @@ static void handle_mapnotify(XEvent *e)
 	if (ev->override_redirect)
 		return;
 
+    // 当窗口的 is_hide 标志为 true 时，说明它被 WM 隐藏了，现在被 X Server 映射了。
 	if (c->is_hide) {
 		log_action("  Window was hidden, now showing.");
 		c->is_hide = false;
@@ -1724,13 +1790,17 @@ static void handle_mapnotify(XEvent *e)
 			t = c->tab;
 
 			if (t == runtime.tab_sel) {
+				// 窗口在当前选中的 Tab 上，正常处理
 				if (c->is_float)
 					c_raise(c);
 
 				c_sel(c);
 				m_update(c->mon);
 			} else {
-				t_sel(t);
+				// 关键修复: 窗口被意外映射，但它不在当前选中的 Tab 上。
+				// 立即再次隐藏它，以保证 Tab 隔离。
+                log_action("  CRITICAL FIX: Window mapped on UNSELECTED tab 0x%lx. Hiding again.", t->id);
+                c_hide(c);
 			}
 		}
 	}
@@ -1766,6 +1836,24 @@ void setup(void)
 		fprintf(stderr, "fatal: cannot open display\n");
 		exit(1);
 	}
+
+    // ----------------------------------------------------
+    // 新增：打开日志文件 ~/devlog
+    // ----------------------------------------------------
+    char *home = getenv("HOME");
+    if (home) {
+        char log_path[512];
+        snprintf(log_path, sizeof(log_path), "%s/devlog", home);
+        logfile = fopen(log_path, "a");
+        if (!logfile) {
+            fprintf(stderr, "pico: Warning: Could not open log file %s\n", log_path);
+        } else {
+            // 写入分隔线，标记新的 WM 会话
+            fprintf(logfile, "\n======================================================\n");
+            log_action("Log file opened successfully: %s", log_path);
+        }
+    }
+    // ----------------------------------------------------
 
 	XSetErrorHandler(xerror);
 
@@ -1827,6 +1915,9 @@ void quit(void)
 
 	if (runtime.dpy)
 		XCloseDisplay(runtime.dpy);
+    
+    if (logfile)
+        fclose(logfile);
 
 	exit(0);
 }
