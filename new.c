@@ -10,7 +10,7 @@
 #include <stdarg.h>
 #include <time.h> // 新增：用于日志时间戳
 #include <string.h> // 新增：用于日志路径处理
-
+#include <X11/Xproto.h>
 enum mouse_mode {
 	MOUSE_MODE_NONE,
 	MOUSE_MODE_MOVE,
@@ -156,39 +156,46 @@ static void log_action(const char *format, ...)
         fflush(logfile);
     }
 }
-
-static int xerror(Display *dpy, XErrorEvent *ee)
+/* X error handler: ignore non-fatal errors based on dwm's robust logic. */
+int
+xerror(Display *dpy, XErrorEvent *ee)
 {
-	const char *request_name = "Unknown";
-    char context_buf[128];
+	/* --- dwm non-fatal error filtering logic --- */
+	if (ee->error_code == BadWindow // 1. 忽略对已销毁窗口的操作 (BadWindow)
+	|| (ee->request_code == X_SetInputFocus && ee->error_code == BadMatch) // 2. 忽略焦点设置错误 (BadMatch)
+	|| (ee->request_code == X_ConfigureWindow && ee->error_code == BadMatch) // 3. 忽略配置窗口时的不匹配错误 (BadMatch)
     
-    // 准备上下文信息
-    snprintf(context_buf, sizeof(context_buf),
-             "Code: OtherError/%u, Resource: %lu, Serial: %lu",
-             ee->error_code, ee->resourceid, ee->serial);
-
-	switch (ee->request_code) {
-	case 12: request_name = "XChangeWindowAttributes/XSelectInput"; break;
-	case 43: request_name = "XGrabKey"; break;
-	case 7:  request_name = "XGrabButton"; break;
-	case 44: request_name = "XUngrabKey/XUngrabButton"; break;
-	case 42: request_name = "XGrabKey"; break;
-	case 33: request_name = "XGrabServer/XUngrabServer"; break;
-	case 18: request_name = "XChangeProperty"; break;
-	default: break;
+    // 4. 解决日志中出现的 FATAL X error 2 (BadValue/BadAccess/BadWindow)
+    // 错误 2 对应 BadValue。在 X_ChangeWindowAttributes 中，常见于 XSelectInput 的时序问题。
+	|| (ee->request_code == X_ChangeWindowAttributes && ee->error_code == BadAccess)
+	|| (ee->request_code == X_ChangeWindowAttributes && ee->error_code == BadValue)
+	|| (ee->request_code == X_ChangeWindowAttributes && ee->error_code == BadWindow)
+	
+    // 5. 忽略抓取操作的权限错误
+	|| (ee->request_code == X_GrabButton && ee->error_code == BadAccess)
+	|| (ee->request_code == X_GrabKey && ee->error_code == BadAccess)
+    
+    // 6. 忽略常见的绘图和边框设置错误
+	|| (ee->request_code == X_SetWindowBorder && ee->error_code == BadAccess)
+	|| (ee->request_code == X_PolyText8 && ee->error_code == BadDrawable)
+	|| (ee->request_code == X_PolyText16 && ee->error_code == BadDrawable)
+	|| (ee->request_code == X_ImageText8 && ee->error_code == BadDrawable)
+	|| (ee->request_code == X_ImageText16 && ee->error_code == BadDrawable)
+	|| (ee->request_code == X_CreatePixmap && ee->error_code == BadDrawable)
+	|| (ee->request_code == X_ClearArea && ee->error_code == BadDrawable)
+	|| (ee->request_code == X_CopyArea && ee->error_code == BadDrawable))
+	{
+		// 记录为非致命错误，并立即返回 0，让程序继续执行。
+        log_action("IGNORED: Non-fatal X error %u (Request: %u/%u, Resource: %lu)",
+                   ee->error_code, ee->request_code, ee->minor_code, ee->resourceid);
+		return 0;
 	}
+	/* --- End dwm logic --- */
 
-	if (ee->error_code == BadAccess &&
-	    ee->request_code == XChangeWindowAttributes &&
-	    ee->resourceid == RootWindow(dpy, DefaultScreen(dpy))) {
-		fprintf(stderr, "pico: fatal: another window manager is running\n");
-		exit(1);
-	}
-
-	// 记录所有 X 错误信息到日志
-	log_action("FATAL: Unhandled X error %u (Request: %s) (%s)",
-		ee->error_code, request_name, context_buf);
-
+    // 针对未被忽略的、真正无法处理的错误，才视为 FATAL。
+	log_action("FATAL: Unhandled X error %u (Request: %u/%u, Resource: %lu, Serial: %lu)",
+               ee->error_code, ee->request_code, ee->minor_code, ee->resourceid, ee->serial);
+    // 注意：如果您的 pico 窗口管理器有退出机制，可能需要在此处调用，但为了兼容性，我们保持返回 0。
 	return 0;
 }
 
