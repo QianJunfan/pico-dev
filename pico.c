@@ -195,8 +195,6 @@ static const struct key keys[] = {
 void spawn(const union arg *arg)
 {
 	if (fork() == 0) {
-		if (runtime.dpy)
-			close(ConnectionNumber(runtime.dpy));
 		setsid();
 		execvp(((char **)arg->ptr)[0], (char **)arg->ptr);
 		fprintf(stderr, "pico: execvp failed for %s\n", ((char **)arg->ptr)[0]);
