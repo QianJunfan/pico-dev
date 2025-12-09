@@ -116,6 +116,8 @@ static struct {
 	uint64_t arrange_type;
 
 	enum mouse_mode mouse_mode;
+        Atom atom_protocols;
+        Atom atom_delete_window;
     Display *dpy;
 } runtime;
 
@@ -691,21 +693,53 @@ void c_moveto_m(struct cli *c, struct mon *m)
 
 void c_kill(struct cli *c)
 {
-	struct mon *m_old = c->mon;
+        struct mon *m_old = c->mon;
+        int n;
+        Atom *protocols;
+        bool supports_delete = false;
 
-	/* TBD: Send WM_DELETE_WINDOW */
+        if (!c || !c->win || !c->mon)
+                return;
+        if (XGetWMProtocols(c->mon->display, c->win, &protocols, &n))
+        {
+                for (int i = 0; i < n; i++)
+                {
+                        if (protocols[i] == runtime.atom_delete_window)
+                        {
+                                supports_delete = true;
+                                break;
+                        }
+                }
+                XFree(protocols);
+        }
 
-	c_detach_t(c);
+        if (supports_delete)
+        {
+                XEvent ev;
+                ev.type = ClientMessage;
+                ev.xclient.window = c->win;
+                ev.xclient.message_type = runtime.atom_protocols;
+                ev.xclient.format = 32;
+                ev.xclient.data.l[0] = runtime.atom_delete_window;
+                ev.xclient.data.l[1] = CurrentTime;
 
-	if (c->win)
-		XDestroyWindow(c->mon->display, c->win);
+                XSendEvent(c->mon->display, c->win, False, NoEventMask, &ev);
 
-	free(c);
+                return;
+        }
 
-	m_update(m_old);
 
-	if (runtime.mon_sel)
-		m_sel(runtime.mon_sel);
+        c_detach_t(c);
+
+        if (c->win)
+                XDestroyWindow(c->mon->display, c->win);
+
+        free(c);
+
+        m_update(m_old);
+
+        if (runtime.mon_sel)
+                m_sel(runtime.mon_sel);
 }
 
 void c_init(struct tab *t, uint64_t arrange)
@@ -1395,7 +1429,8 @@ void setup(void)
 		
 		m_init(runtime.dpy, root, x, y, w, h);
 	}
-	
+	runtime.atom_protocols = XInternAtom(runtime.dpy, "WM_PROTOCOLS", False);
+        runtime.atom_delete_window = XInternAtom(runtime.dpy, "WM_DELETE_WINDOW", False);
 	key_grab();
 	
 	XSync(runtime.dpy, False);
