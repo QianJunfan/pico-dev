@@ -391,7 +391,6 @@ static void handle_map_request(XEvent *e)
 	if (wa.override_redirect)
 		return;
 
-	// 设置默认尺寸为半屏大小，并居中显示，以便窗口可以立即被调整大小
 	int default_w = sw / 2;
 	int default_h = (sh - BAR_HEIGHT) / 2;
 	
@@ -417,6 +416,7 @@ static void handle_configure_request(XEvent *e)
 {
 	XConfigureRequestEvent *ev = &e->xconfigurerequest;
 	XWindowChanges wc;
+	struct client *c;
 
 	wc.x = ev->x;
 	wc.y = ev->y;
@@ -427,6 +427,15 @@ static void handle_configure_request(XEvent *e)
 	wc.stack_mode = ev->detail;
 	
 	XConfigureWindow(dpy, ev->window, ev->value_mask, &wc);
+	
+	c = client_find(ev->window);
+	if (c) {
+		// 修复 #2: 客户端自己请求配置时，同步更新本地几何数据
+		if (ev->value_mask & CWX) c->x = ev->x;
+		if (ev->value_mask & CWY) c->y = ev->y;
+		if (ev->value_mask & CWWidth) c->w = ev->width;
+		if (ev->value_mask & CWHeight) c->h = ev->height;
+	}
 }
 
 static void handle_destroy_notify(XEvent *e)
