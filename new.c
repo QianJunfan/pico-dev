@@ -1275,6 +1275,40 @@ static KeyCode key_get(KeySym keysym)
 
 	return XKeysymToKeycode(m->display, keysym);
 }
+
+/* ************************************************************************* */
+/* ** MOUSE GRAB ** */
+/* ************************************************************************* */
+
+static void mouse_grab(void)
+{
+	struct mon *m = runtime.mons;
+    // NumLock 状态所需的 Mod 掩码： 0 (无锁) 和 XK_NUM (Mod2Mask)
+    const unsigned int numlock_masks[] = { 0, XK_NUM }; 
+    unsigned int j;
+    
+	if (!m)
+		return;
+
+    // 清除现有的 Button 抓取
+    XUngrabButton(AnyButton, AnyModifier, m->root);
+
+    // 遍历所有 NumLock 组合 (0 和 Mod2Mask)
+    for (j = 0; j < sizeof(numlock_masks) / sizeof(*numlock_masks); j++) {
+        // 抓取 Super + Button1 (移动)
+        XGrabButton(m->display, Button1, MOUSE_MOD | numlock_masks[j], m->root,
+                    True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
+
+        // 抓取 Super + Button3 (缩放)
+        XGrabButton(m->display, Button3, MOUSE_MOD | numlock_masks[j], m->root,
+                    True, ButtonPressMask | ButtonReleaseMask | PointerMotionMask,
+                    GrabModeAsync, GrabModeAsync, None, None);
+    }
+	log_action("Mouse grabs (Button1/3 + MOUSE_MOD) completed on root window");
+}
+
+
 static void key_grab(void)
 {
 	struct mon *m = runtime.mons;
@@ -1762,7 +1796,7 @@ void setup(void)
     runtime.atom_delete_window = XInternAtom(runtime.dpy, "WM_DELETE_WINDOW", False);
 	log_action("WM_PROTOCOLS atoms fetched");
 	key_grab();
-	
+	mouse_grab();
 	XSync(runtime.dpy, False);
 	log_action("Setup complete. Entering main loop.");
 }
