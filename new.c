@@ -820,30 +820,27 @@ void t_sel(struct tab *t)
 
 	m_update(t->mon); 
 }
-
 void t_unsel(struct tab *t)
 {
-	struct cli *c;
-
 	if (!t || !t->is_sel)
 		return;
 
-	log_action("Tab unselect: 0x%lx", t->id);
-	t->is_sel = false;
+	log_action("Tab unselect: 0x%lx. Hiding all its clients.", t->id);
 
-	if (t->cli_sel)
-		c_unsel(t->cli_sel);
-
-	// 隐藏此 Tab 上的所有客户端
+    // 核心修复 2: 遍历当前 Tab 的**所有客户端**并隐藏它们
+	struct cli *c;
+    // 假设 struct tab *clis 是所有客户端的链表头
 	for (c = t->clis; c; c = c->next) {
-		if (!c->is_hide) {
-			c_hide(c);
-		}
+		c_hide(c); // 调用 c_hide 来隐藏窗口
 	}
-    
-	// 强制 X 服务器立即处理隐藏请求
-	if (t->mon && t->mon->display)
-		XSync(t->mon->display, False);
+	
+	t->is_sel = false;
+	
+	// 清理 Monitor 和全局的选中状态
+	if (t->mon && t->mon->tab_sel == t)
+		t->mon->tab_sel = NULL;
+	if (runtime.tab_sel == t)
+		runtime.tab_sel = NULL;
 }
 
 
@@ -869,24 +866,22 @@ void c_hide(struct cli *c)
 {
 	if (!c || c->is_hide)
 		return;
-
-	log_action("Client 0x%lx hide (unmap by wm)", c->win);
-	c->is_unmap_by_wm = true;
-
+	
+	log_action("Client hide: 0x%lx", c->win);
+	// 核心修复 1: 调用 XUnmapWindow 隐藏窗口
 	XUnmapWindow(c->mon->display, c->win);
-
-	c_unsel(c);
+	c->is_hide = true;
 }
 
 void c_show(struct cli *c)
 {
 	if (!c || !c->is_hide)
 		return;
-
-	log_action("Client 0x%lx show (map)", c->win);
+	
+	log_action("Client show: 0x%lx", c->win);
+	// c_show 的基本实现，用于 m_update 布局时显示新窗口
 	XMapWindow(c->mon->display, c->win);
 	c->is_hide = false;
-	c_sel(c);
 }
 
 void c_tile(struct cli *c)
