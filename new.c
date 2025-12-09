@@ -204,6 +204,22 @@ void view_prev_tab(const union arg *arg);
 void focus_next_cli(const union arg *arg);
 void focus_prev_cli(const union arg *arg);
 
+void new_tab(const union arg *arg)
+{
+	struct mon *m = runtime.mon_sel;
+	struct tab *t;
+
+	if (!m)
+		return;
+
+	t = t_init(m);
+
+	if (t) {
+		log_action("New Tab created: 0x%lx, activating it.", t->id);
+		t_sel(t);
+	}
+}
+
 #define XK_SHIFT	ShiftMask
 #define XK_LOCK		LockMask
 #define XK_CONTROL	ControlMask
@@ -230,7 +246,7 @@ static const struct key keys[] = {
 
 	{ XK_SUPER,   XK_Right,     view_next_tab,  {0} },
 	{ XK_SUPER,   XK_Left,      view_prev_tab,  {0} },
-
+        { XK_SUPER,   XK_t,         new_tab         {0} },
 	{ XK_SUPER,   XK_j,         focus_next_cli, {0} },
 	{ XK_SUPER,   XK_k,         focus_prev_cli, {0} },
 };
