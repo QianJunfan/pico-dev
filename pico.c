@@ -7,7 +7,7 @@
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
-#define ALT_MASK Mod1Mask
+#define SUPER_MASK Mod4Mask
 #define IGNORE_MODS (LockMask | Mod2Mask) 
 
 void launch_xterm() {
@@ -31,13 +31,13 @@ int main(void)
     
     launch_xterm();
     
-    XGrabKey(dpy, XKeysymToKeycode(dpy, XStringToKeysym("F1")), ALT_MASK,
+    XGrabKey(dpy, XKeysymToKeycode(dpy, XStringToKeysym("F1")), SUPER_MASK,
             DefaultRootWindow(dpy), True, GrabModeAsync, GrabModeAsync);
     
-    XGrabButton(dpy, 1, ALT_MASK, DefaultRootWindow(dpy), True,
+    XGrabButton(dpy, 1, SUPER_MASK, DefaultRootWindow(dpy), True,
             ButtonPressMask|ButtonReleaseMask|PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
     
-    XGrabButton(dpy, 3, ALT_MASK, DefaultRootWindow(dpy), True,
+    XGrabButton(dpy, 3, SUPER_MASK, DefaultRootWindow(dpy), True,
             ButtonPressMask|ButtonReleaseMask|PointerMotionMask, GrabModeAsync, GrabModeAsync, None, None);
 
     start.subwindow = None;
@@ -53,7 +53,7 @@ int main(void)
             KeySym keysym = XkbKeycodeToKeysym(dpy, ev.xkey.keycode, 0, 0);
 
             
-            if (keysym == XK_F1 && (clean_state == ALT_MASK)) {
+            if (keysym == XK_F1 && (clean_state == SUPER_MASK)) {
                  if(ev.xkey.subwindow != None)
                     XRaiseWindow(dpy, ev.xkey.subwindow);
             }
@@ -65,7 +65,7 @@ int main(void)
             
             unsigned int clean_state = ev.xbutton.state & ~IGNORE_MODS;
 
-            if (clean_state == ALT_MASK)
+            if (clean_state == SUPER_MASK)
             {
                 XGetWindowAttributes(dpy, ev.xbutton.subwindow, &attr);
                 start = ev.xbutton;
@@ -76,7 +76,7 @@ int main(void)
         else if(ev.type == MotionNotify && start.subwindow != None)
         {
             int xdiff = ev.xbutton.x_root - start.x_root;
-            int ydiff = ev.xbutton.y_root - start.y_root;
+            int ydiff = ev.xbutton.y_root - start.x_root;
             XMoveResizeWindow(dpy, start.subwindow,
                 attr.x + (start.button==1 ? xdiff : 0),
                 attr.y + (start.button==1 ? ydiff : 0),
