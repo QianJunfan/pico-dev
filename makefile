@@ -1,6 +1,6 @@
 PREFIX?=/usr/X11R6
 CFLAGS?=-Os -pedantic -Wall
-PROGRAM = pico
+PROGRAM = test
 
 all: $(PROGRAM)
 
