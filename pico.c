@@ -41,7 +41,7 @@ struct client {
 	Window win;
 	int ws_id;
 	int x, y, w, h;
-	int start_x, start_y, start_w, start_h; 
+	int start_x, start_y, start_w, start_h;
 };
 
 struct workspace {
@@ -77,7 +77,7 @@ static void handle_destroy_notify(XEvent *e);
 static void handle_enter_notify(XEvent *e);
 static void handle_expose(XEvent *e);
 static void handle_key_press(XEvent *e);
-static void start_move_resize(XEvent *e); 
+static void start_move_resize(XEvent *e);
 static void init_bar(void);
 static void draw_bar(void);
 static void init_workspaces(void);
@@ -121,7 +121,7 @@ int main(void)
 			handle_key_press(&ev);
 			break;
 		case EV_ButtonPress:
-			start_move_resize(&ev); 
+			start_move_resize(&ev);
 			break;
 		case EV_MapRequest:
 			handle_map_request(&ev);
@@ -175,10 +175,10 @@ static void start_move_resize(XEvent *e)
 	if (XGrabPointer(dpy, be->subwindow, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None, CurrentTime) != GrabSuccess)
 		return;
 
-    if (be->button == 3) {
-        XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
-    }
-    
+	if (be->button == 3) {
+		XWarpPointer(dpy, None, c->win, 0, 0, 0, 0, c->w + BORDER_WIDTH - 1, c->h + BORDER_WIDTH - 1);
+	}
+	
 	do {
 		XMaskEvent(dpy, MOUSE_MASK | ExposureMask | SubstructureRedirectMask, &ev);
 		
@@ -198,7 +198,7 @@ static void start_move_resize(XEvent *e)
 				c->y = c->start_y + ydiff;
 				XMoveWindow(dpy, c->win, c->x, c->y);
 			} else if (be->button == 3) { 
-				c->w = MAX(1, me->x_root - c->start_x); 
+				c->w = MAX(1, me->x_root - c->start_x);
 				c->h = MAX(1, me->y_root - c->start_y);
 				XResizeWindow(dpy, c->win, c->w, c->h);
 			}
@@ -225,7 +225,7 @@ static void start_move_resize(XEvent *e)
 
 	XUngrabPointer(dpy, CurrentTime);
 
-    while (XCheckMaskEvent(dpy, EnterWindowMask, &ev)); 
+	while (XCheckMaskEvent(dpy, EnterWindowMask, &ev));
 }
 
 
