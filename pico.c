@@ -391,10 +391,15 @@ static void handle_map_request(XEvent *e)
 	if (wa.override_redirect)
 		return;
 
-	wa.x = 0;
-	wa.y = BAR_HEIGHT;
-	wa.width = sw;
-	wa.height = sh - BAR_HEIGHT;
+	// 设置默认尺寸为半屏大小，并居中显示，以便窗口可以立即被调整大小
+	int default_w = sw / 2;
+	int default_h = (sh - BAR_HEIGHT) / 2;
+	
+	wa.x = (sw - default_w) / 2;
+	wa.y = BAR_HEIGHT + (sh - BAR_HEIGHT - default_h) / 2;
+	wa.width = default_w;
+	wa.height = default_h;
+
 	XMoveResizeWindow(dpy, ev->window, wa.x, wa.y, wa.width, wa.height);
 	
 	client_add(ev->window, &wa);
