@@ -732,11 +732,8 @@ void c_unfoc(struct cli *c)
 	log_action("Client unfocus: 0x%lx", c->win);
 	c->is_foc = false;
 }
-
 void t_sel(struct tab *t)
 {
-	struct cli *c;
-	
 	if (!t || t == runtime.tab_sel)
 		return;
 
@@ -757,18 +754,9 @@ void t_sel(struct tab *t)
 		c_sel(t->cli_sel);
 	}
 
-	// ----------------------------------------------------
-	// 新增逻辑：显示此 Tab 上的所有客户端
-	// ----------------------------------------------------
-	for (c = t->clis; c; c = c->next) {
-		if (c->is_hide) {
-			c_show(c);
-		}
-	}
-	// ----------------------------------------------------
-
-	m_update(t->mon);
+	m_update(t->mon); // <-- Tab 切换最终触发 m_update
 }
+
 void t_unsel(struct tab *t)
 {
 	struct cli *c;
@@ -782,20 +770,18 @@ void t_unsel(struct tab *t)
 	if (t->cli_sel)
 		c_unsel(t->cli_sel);
 
-	// ----------------------------------------------------
-	// 隐藏所有客户端
+	// 隐藏此 Tab 上的所有客户端
 	for (c = t->clis; c; c = c->next) {
 		if (!c->is_hide) {
 			c_hide(c);
 		}
 	}
-	// ----------------------------------------------------
     
 	// ----------------------------------------------------
-	// 关键修复：强制 X 服务器立即处理 UnmapWindow 请求，确保窗口隐藏
+	// 修复 1: 强制 X 服务器立即处理隐藏请求
 	// ----------------------------------------------------
-	if (t->mon)
-		XSync(t->mon->display, False); 
+	if (t->mon && t->mon->display)
+		XSync(t->mon->display, False);
 	// ----------------------------------------------------
 }
 
@@ -1233,11 +1219,15 @@ void m_update(struct mon *m)
 	log_action("Monitor 0x%lx update (layout)", m->id);
 	n_til = t->cli_til_cnt;
 
+	// ----------------------------------------------------
+	// 修复 2A: 强制映射所有浮动窗口
+	// ----------------------------------------------------
 	for (c = t->clis_flt; c; c = c->next) {
-		if (c->is_hide)
-			c_show(c);
+		XMapWindow(c->mon->display, c->win); // 强制映射
+		c->is_hide = false; // 清除隐藏标志
 		c_raise(c);
 	}
+	// ----------------------------------------------------
 
 	if (n_til == 0)
 		goto end;
@@ -1273,8 +1263,12 @@ void m_update(struct mon *m)
 show_tiled:
 	for (i = 0; i < n_til; i++) {
 		c = t->clis_til[i];
-		if (c->is_hide)
-			c_show(c);
+		// ----------------------------------------------------
+		// 修复 2B: 强制映射所有平铺窗口，并清除隐藏标志
+		// ----------------------------------------------------
+		XMapWindow(c->mon->display, c->win);
+		c->is_hide = false; 
+		// ----------------------------------------------------
 	}
 	if (t->cli_sel && t->cli_sel->is_tile)
 		c_raise(t->cli_sel);
@@ -1283,7 +1277,6 @@ end:
 	if (!t->cli_sel && t->clis)
 		c_sel(t->clis);
 }
-
 static KeyCode key_get(KeySym keysym)
 {
 	struct mon *m = runtime.mons;
