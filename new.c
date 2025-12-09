@@ -162,7 +162,7 @@ xerror(Display *dpy, XErrorEvent *ee)
 {
 	/* --- dwm non-fatal error filtering logic --- */
 	if (ee->error_code == BadWindow // 1. 忽略对已销毁窗口的操作 (BadWindow)
-	|| (ee->request_code == X_SetInputFocus && ee->error_code == BadMatch) // 2. 忽略焦点设置错误 (BadMatch)
+	|| (ee->request_code == XSetInputFocus && ee->error_code == BadMatch) // 2. 忽略焦点设置错误 (BadMatch)
 	|| (ee->request_code == X_ConfigureWindow && ee->error_code == BadMatch) // 3. 忽略配置窗口时的不匹配错误 (BadMatch)
     
     // 4. 解决日志中出现的 FATAL X error 2 (BadValue/BadAccess/BadWindow)
