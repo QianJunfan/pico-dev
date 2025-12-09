@@ -14,7 +14,6 @@
 static Display *dpy;
 static Window root;
 static int screen;
-static int sw, sh;
 static unsigned int numlockmask = 0;
 
 void spawn(const char *cmd) {
@@ -24,6 +23,10 @@ void spawn(const char *cmd) {
         execlp(cmd, cmd, NULL);
         _exit(0);
     }
+}
+
+int xerror(Display *dpy, XErrorEvent *er) {
+    return 0;
 }
 
 void updatenumlockmask(void) {
@@ -40,20 +43,49 @@ void updatenumlockmask(void) {
 
 void grabkeys(void) {
     updatenumlockmask();
-    unsigned int i, j;
+    unsigned int j;
     unsigned int modifiers[] = { 0, LockMask, numlockmask, numlockmask|LockMask };
     KeyCode k1 = XKeysymToKeycode(dpy, XK_F1);
     KeyCode k2 = XKeysymToKeycode(dpy, XK_F2);
+    KeyCode k3 = XKeysymToKeycode(dpy, XK_q);
 
     XUngrabKey(dpy, AnyKey, AnyModifier, root);
 
     for (j = 0; j < 4; j++) {
         if (k1) XGrabKey(dpy, k1, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
         if (k2) XGrabKey(dpy, k2, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
+        if (k3) XGrabKey(dpy, k3, MOD_MASK | modifiers[j], root, True, GrabModeAsync, GrabModeAsync);
         XGrabButton(dpy, 1, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
         XGrabButton(dpy, 3, MOD_MASK | modifiers[j], root, True, MOUSE_MASK, GrabModeAsync, GrabModeAsync, None, None);
     }
 }
+
+void maprequest(XEvent *e) {
+    XMapRequestEvent *ev = &e->xmaprequest;
+    XMapWindow(dpy, ev->window);
+    XSetInputFocus(dpy, ev->window, RevertToParent, CurrentTime);
+}
+
+void configurerequest(XEvent *e) {
+    XConfigureRequestEvent *ev = &e->xconfigurerequest;
+    XWindowChanges wc;
+
+    wc.x = ev->x;
+    wc.y = ev->y;
+    wc.width = ev->width;
+    wc.height = ev->height;
+    wc.border_width = ev->border_width;
+    wc.sibling = ev->above;
+    wc.stack_mode = ev->detail;
+    
+    XConfigureWindow(dpy, ev->window, ev->value_mask, &wc);
+}
+
+void (*handler[LASTEvent]) (XEvent *) = {
+    [KeyPress] = NULL,
+    [MapRequest] = maprequest,
+    [ConfigureRequest] = configurerequest
+};
 
 int main(void) {
     XEvent ev;
@@ -61,6 +93,8 @@ int main(void) {
     XButtonEvent start = {0};
 
     if (!(dpy = XOpenDisplay(NULL))) return 1;
+
+    XSetErrorHandler(xerror);
     
     struct sigaction sa;
     sigemptyset(&sa.sa_mask);
@@ -70,8 +104,6 @@ int main(void) {
 
     screen = DefaultScreen(dpy);
     root = RootWindow(dpy, screen);
-    sw = DisplayWidth(dpy, screen);
-    sh = DisplayHeight(dpy, screen);
 
     XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask);
     
@@ -80,6 +112,10 @@ int main(void) {
 
     for (;;) {
         XNextEvent(dpy, &ev);
+        if (handler[ev.type]) {
+            handler[ev.type](&ev);
+            continue;
+        }
 
         if (ev.type == KeyPress) {
             KeySym keysym = XkbKeycodeToKeysym(dpy, ev.xkey.keycode, 0, 0);
@@ -95,6 +131,9 @@ int main(void) {
                         XGetInputFocus(dpy, &w, &revert);
                         if(w != root && w != 0) XDestroyWindow(dpy, w);
                     }
+                } else if (keysym == XK_q) { 
+                    XCloseDisplay(dpy);
+                    return 0;
                 }
             }
         }
@@ -105,8 +144,8 @@ int main(void) {
             XSetInputFocus(dpy, start.subwindow, RevertToParent, CurrentTime);
         }
         else if (ev.type == MotionNotify && start.subwindow != None) {
-            int xdiff = ev.xbutton.x_root - start.x_root;
-            int ydiff = ev.xbutton.y_root - start.y_root;
+            int xdiff = ev.xmotion.x_root - start.x_root;
+            int ydiff = ev.xmotion.y_root - start.y_root;
             
             if (start.button == 1) {
                 XMoveWindow(dpy, start.subwindow, attr.x + xdiff, attr.y + ydiff);
