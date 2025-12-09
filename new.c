@@ -122,7 +122,24 @@ static struct {
         Atom atom_delete_window;
     Display *dpy;
 } runtime;
+static int xerror(Display *dpy, XErrorEvent *ee);
 
+static int xerror(Display *dpy, XErrorEvent *ee)
+{
+    // 如果错误发生在 Root Window 上，并且是 BadAccess（权限不足），则很可能意味着抢占失败
+	if (ee->error_code == BadAccess && ee->request_code == X_ChangeWindowAttributes
+        && ee->resourceid == RootWindow(dpy, DefaultScreen(dpy)))
+	{
+		fprintf(stderr, "pico: fatal: another window manager is running\n");
+		exit(1);
+	}
+    
+    // 打印其他未处理的错误
+	fprintf(stderr, "pico: fatal: unhandled X error %u (Request Code: %u, Serial: %lu)\n", 
+            ee->error_code, ee->request_code, ee->serial);
+            
+	return 0; // 必须返回 0
+}
 /* function prototypes */
 void c_attach_t(struct cli *c, struct tab *t);
 void c_attach_d(struct cli *c, struct doc *d);
@@ -812,7 +829,6 @@ void c_moveto_m(struct cli *c, struct mon *m)
 
 	c_moveto_t(c, m->tab_sel);
 }
-
 void c_kill(struct cli *c)
 {
         struct mon *m_old = c->mon;
@@ -823,7 +839,7 @@ void c_kill(struct cli *c)
         if (!c || !c->win || !c->mon)
                 return;
         
-        // 修复 1：在 detach 之前保存 display 指针
+        // 修复：在 detach 之前保存 display 指针
         Display *dpy = c->mon->display; 
 
         if (XGetWMProtocols(c->mon->display, c->win, &protocols, &n))
@@ -856,7 +872,7 @@ void c_kill(struct cli *c)
 
         c_detach_t(c);
 
-        // 修复 1：使用保存的 dpy 指针
+        // 修复：使用保存的 dpy 指针
         if (c->win)
                 XDestroyWindow(dpy, c->win); 
 
@@ -1188,6 +1204,7 @@ static void key_handle(XEvent *e)
 		}
 	}
 }
+
 static void handle_maprequest(XEvent *e)
 {
 	XMapRequestEvent *ev = &e->xmaprequest;
@@ -1231,7 +1248,7 @@ static void handle_maprequest(XEvent *e)
 	if ((wmh = XGetWMHints(t->mon->display, c->win)))
 		XFree(wmh);
 
-	// 修复 2a：将 c_attach_t 提前到所有需要 c->mon 的操作之前
+	// 修复：将 c_attach_t 提前到所有需要 c->mon 的操作之前
 	c_attach_t(c, t); 
 
 	XSelectInput(c->mon->display, c->win,
@@ -1246,7 +1263,7 @@ static void handle_maprequest(XEvent *e)
 	c_sel(c);
 	m_update(t->mon);
 
-	// 修复 2b：强制与 X Server 同步，解决 fatal IO error 11
+	// 修复：强制与 X Server 同步，解决 fatal IO error 104
     if (c->mon)
 	    XSync(c->mon->display, False); 
 }
@@ -1392,13 +1409,13 @@ static void handle_buttonrelease(XEvent *e)
 	if (runtime.cli_sel)
 		c_sel(runtime.cli_sel);
 }
-
 static void handle_configurerequest(XEvent *e)
 {
 	XConfigureRequestEvent *ev = &e->xconfigurerequest;
 	XWindowChanges wc;
 	struct cli *c;
-
+    
+    // 如果找不到客户端，先配置窗口并返回
 	if (!(c = c_fetch(ev->window))) {
 		wc.x = ev->x;
 		wc.y = ev->y;
@@ -1411,38 +1428,44 @@ static void handle_configurerequest(XEvent *e)
 		return;
 	}
 
-	if (c->is_float) {
-		wc.x = ev->x;
-		wc.y = ev->y;
-		wc.width = ev->width;
-		wc.height = ev->height;
-		wc.border_width = 0;
-		wc.sibling = ev->above;
-		wc.stack_mode = ev->detail;
+    // 复制客户端的当前几何图形
+    wc.x = c->x;
+    wc.y = c->y;
+    wc.width = c->w;
+    wc.height = c->h;
+    wc.border_width = 0;
+    wc.sibling = ev->above;
+    wc.stack_mode = ev->detail;
 
+    // 如果是浮动窗口，允许客户端改变它的浮动几何图形
+	if (c->is_float) {
+        
+        // 更新浮动尺寸/位置
 		if (ev->value_mask & CWX) c->flt_x = ev->x;
 		if (ev->value_mask & CWY) c->flt_y = ev->y;
 		if (ev->value_mask & CWWidth) c->flt_w = ev->width;
 		if (ev->value_mask & CWHeight) c->flt_h = ev->height;
 
+        // 使用客户端请求的值来配置窗口
+        wc.x = c->flt_x;
+        wc.y = c->flt_y;
+        wc.width = c->flt_w;
+        wc.height = c->flt_h;
+        
 		XConfigureWindow(ev->display, ev->window, ev->value_mask, &wc);
 
 	} else {
-		wc.sibling = ev->above;
-		wc.stack_mode = ev->detail;
-
-		wc.x = c->x;
-		wc.y = c->y;
-		wc.width = c->w;
-		wc.height = c->h;
-		wc.border_width = 0;
-
-		ev->value_mask &= ~CWX;
-		ev->value_mask &= ~CWY;
-		ev->value_mask &= ~CWWidth;
-		ev->value_mask &= ~CWHeight;
-
-		XConfigureWindow(ev->display, ev->window, ev->value_mask, &wc);
+        // 如果是平铺窗口，忽略客户端请求的几何图形，使用 WM 决定的几何图形来配置窗口
+        
+        // 确保使用 WM 决定的几何图形
+        wc.x = c->x;
+        wc.y = c->y;
+        wc.width = c->w;
+        wc.height = c->h;
+        
+        // 修复：发送 ConfigureNotify 告知客户端其真实的几何图形
+		XConfigureWindow(ev->display, ev->window, 
+            CWX | CWY | CWWidth | CWHeight | CWBorderWidth, &wc);
 	}
 }
 
@@ -1530,7 +1553,6 @@ void handle_init(void)
 	handler[EnterNotify]	= handle_enternotify;
 	handler[ConfigureRequest] = handle_configurerequest;
 }
-
 void setup(void)
 {
 	Screen *s;
@@ -1541,6 +1563,9 @@ void setup(void)
 		fprintf(stderr, "fatal: cannot open display\n");
 		exit(1);
 	}
+
+    // 修复：安装 X 错误处理程序
+    XSetErrorHandler(xerror);
 
 	handle_init();
 
@@ -1558,10 +1583,14 @@ void setup(void)
 			SubstructureRedirectMask | SubstructureNotifyMask | 
 			KeyPressMask | ButtonPressMask | EnterWindowMask);
 		
+        // 修复：抢占后立即同步，如果失败（BadAccess），xerror 会捕获并退出
+        XSync(runtime.dpy, False); 
+        
 		m_init(runtime.dpy, root, x, y, w, h);
 	}
-	runtime.atom_protocols = XInternAtom(runtime.dpy, "WM_PROTOCOLS", False);
-        runtime.atom_delete_window = XInternAtom(runtime.dpy, "WM_DELETE_WINDOW", False);
+    
+    runtime.atom_protocols = XInternAtom(runtime.dpy, "WM_PROTOCOLS", False);
+    runtime.atom_delete_window = XInternAtom(runtime.dpy, "WM_DELETE_WINDOW", False);
 	key_grab();
 	
 	XSync(runtime.dpy, False);
